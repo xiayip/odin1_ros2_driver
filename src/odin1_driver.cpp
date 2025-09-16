@@ -455,7 +455,7 @@ void Odin1Driver::publishOdometry(capture_Image_List_t *stream) {
     if (data_len == sizeof(ros_odom_convert_complete_t)) {
 
         ros_odom_convert_complete_t* odom_data = (ros_odom_convert_complete_t*)stream->imageList[0].pAddr;
-        // msg.header.stamp = ns_to_ros_time(odom_data->timestamp_ns);
+        // msg.header.stamp = ns_to_ros_time(odom_data->timestamp_ns); // Problems here, timestamp_ns is not correct
         msg.header.stamp = this->now();
 
         msg.pose.pose.position.x = static_cast<double>(odom_data->pos[0]) / 1e6;
@@ -465,7 +465,7 @@ void Odin1Driver::publishOdometry(capture_Image_List_t *stream) {
         msg.pose.pose.orientation.x = static_cast<double>(odom_data->orient[0]) / 1e6;
         msg.pose.pose.orientation.y = static_cast<double>(odom_data->orient[1]) / 1e6;
         msg.pose.pose.orientation.z = static_cast<double>(odom_data->orient[2]) / 1e6;
-        msg.pose.pose.orientation.w = static_cast<double>(odom_data->orient[3]) / 1e6;
+        msg.pose.pose.orientation.w = static_cast<double>(odom_data->orient[3]) / 1e6; // Problems here, orientation quaternion is not correct
 
         msg.twist.twist.linear.x = static_cast<double>(odom_data->linear_velocity[0]) / 1e6;
         msg.twist.twist.linear.y = static_cast<double>(odom_data->linear_velocity[1]) / 1e6;
@@ -483,9 +483,9 @@ void Odin1Driver::publishOdometry(capture_Image_List_t *stream) {
             0.0, 0.0, 0.0, static_cast<double>(odom_data->cov[12]) / 1e9, static_cast<double>(odom_data->cov[13]) / 1e9, static_cast<double>(odom_data->cov[14]) / 1e9,
             0.0, 0.0, 0.0, static_cast<double>(odom_data->cov[15]) / 1e9, static_cast<double>(odom_data->cov[16]) / 1e9, static_cast<double>(odom_data->cov[17]) / 1e9,
         };
+        odom_publisher_->publish(std::move(msg));
     } 
 
-    odom_publisher_->publish(std::move(msg));
 }
 
 void Odin1Driver::publishIntensityCloud(capture_Image_List_t* stream, int idx) {
