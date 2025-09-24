@@ -6,7 +6,7 @@ odin1_ros2_driver:
     sendodom: 1
     senddtof: 1
     sendcloudslam: 1
-    sendcloudrender: 1
+    sendcloudrender: 0
     sendrgbcompressed: 1
     senddepth: 0
     recorddata: 0

@@ -113,6 +113,7 @@ void Odin1Driver::setupServices()
 
 bool Odin1Driver::setupSDKCallbacks()
 {
+    lidar_log_set_level(LIDAR_LOG_DEBUG);
     if (lidar_system_init(&Odin1Driver::lidarDeviceCallbackStatic))
     {
         RCLCPP_ERROR(this->get_logger(), "Lidar system init failed");
