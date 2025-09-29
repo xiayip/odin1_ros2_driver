@@ -47,12 +47,14 @@ typedef enum {
 } lidar_mode_e;
 
 typedef enum {
-    LIDAR_DT_NONE               = 0,
-    LIDAR_DT_RAW_RGB            = 1 << 1, //0x
-    LIDAR_DT_RAW_IMU            = 1 << 2,
-    LIDAR_DT_RAW_DTOF           = 1 << 3,
-    LIDAR_DT_SLAM_CLOUD         = 1 << 4, //
-    LIDAR_DT_SLAM_ODOMETRY      = 1 << 5,
+    LIDAR_DT_NONE                   = 0,
+    LIDAR_DT_RAW_RGB                = 1 << 1, //0x
+    LIDAR_DT_RAW_IMU                = 1 << 2,
+    LIDAR_DT_RAW_DTOF               = 1 << 3,
+    LIDAR_DT_SLAM_CLOUD             = 1 << 4, //
+    LIDAR_DT_SLAM_ODOMETRY          = 1 << 5,
+    LIDAR_DT_DEV_STATUS             = 1 << 6,
+    LIDAR_DT_SLAM_ODOMETRY_HIGHFREQ = 1 << 7,
 } lidar_data_type_e;
 
 typedef struct {
@@ -90,19 +92,16 @@ typedef struct {
     int64_t cov[3 * 3 * 2];
 } ros_odom_convert_complete_t;
 
-typedef struct icm_6aixs_data_t {
-	int16_t aacx;
-	int16_t aacy; 
-	int16_t aacz;
-	int16_t gyrox;
-	int16_t gyroy;
-	int16_t gyroz;
-	uint8_t valid;
-	uint32_t nums;
-	uint8_t fsync_pack;
-	uint16_t interval;
-	uint64_t stamp;
-} icm_6aixs_data_t;
+typedef struct {
+    float accel_x;
+    float accel_y;
+    float accel_z;
+    float gyro_x;
+    float gyro_y;
+    float gyro_z;
+    uint64_t stamp;
+    uint64_t sequence;
+} imu_convert_data_t;
 
  typedef struct {
     uint32_t length;

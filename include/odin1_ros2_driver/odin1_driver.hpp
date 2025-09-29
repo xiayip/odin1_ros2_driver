@@ -53,7 +53,7 @@ private:
     bool activeStream(bool active);
     // ros2 publish functions
     void publishRgb(capture_Image_List_t* data);
-    void publishImu(icm_6aixs_data_t* stream);
+    void publishImu(imu_convert_data_t* stream);
     void publishOdometry(capture_Image_List_t* stream);
     void publishIntensityCloud(capture_Image_List_t* stream, int idx);
     void publishPC2XYZRGBA(capture_Image_List_t* stream, int idx);

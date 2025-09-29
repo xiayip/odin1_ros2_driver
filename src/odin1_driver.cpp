@@ -204,7 +204,12 @@ void Odin1Driver::lidarDeviceCallback(const lidar_device_info_t *device, bool at
         std::string config_dir = ament_index_cpp::get_package_share_directory("odin1_ros2_driver") + "/config";
         RCLCPP_INFO(rclcpp::get_logger("device_cb"), "Calibration files will be saved to: %s", config_dir.c_str());
         
-        // lidar_get_version(odin_device_);
+        if (lidar_get_version(odin_device_))
+        {
+            RCLCPP_ERROR(rclcpp::get_logger("device_cb"), "Get version failed");
+            closeDevice();
+            return;
+        }
         
         if (lidar_get_calib_file(odin_device_, config_dir.c_str()))
         {
@@ -276,7 +281,8 @@ void Odin1Driver::lidarDataCallback(const lidar_data_t *data, void *user_data) {
         break;
     case LIDAR_DT_RAW_IMU:
         if (sendimu_) {
-            publishImu((icm_6aixs_data_t *)&data->stream);
+            imu_convert_data_t *imudata = (imu_convert_data_t *)data->stream.imageList[0].pAddr;
+            publishImu(imudata);
         }
         break;
     case LIDAR_DT_RAW_DTOF:
@@ -290,6 +296,14 @@ void Odin1Driver::lidarDataCallback(const lidar_data_t *data, void *user_data) {
         }
         break;
     case LIDAR_DT_SLAM_ODOMETRY:
+        // if (sendodom_) {
+        //     publishOdometry((capture_Image_List_t *)&data->stream);
+        // }
+        break;
+    case LIDAR_DT_DEV_STATUS:
+        // Handle device status if needed
+        break;
+    case LIDAR_DT_SLAM_ODOMETRY_HIGHFREQ:
         if (sendodom_) {
             publishOdometry((capture_Image_List_t *)&data->stream);
         }
@@ -425,19 +439,19 @@ void Odin1Driver::publishRgb(capture_Image_List_t *stream) {
     }
 }
 
-void Odin1Driver::publishImu(icm_6aixs_data_t *stream) {
+void Odin1Driver::publishImu(imu_convert_data_t *stream) {
     sensor_msgs::msg::Imu imu_msg;
     
     imu_msg.header.stamp = ns_to_ros_time(stream->stamp);
     imu_msg.header.frame_id = "imu_link";
     
-    imu_msg.linear_acceleration.y = -1 * static_cast<double>(accel_convert(stream->aacx, ACC_SEN_SCALE));
-    imu_msg.linear_acceleration.x = static_cast<double>(accel_convert(stream->aacy, ACC_SEN_SCALE));
-    imu_msg.linear_acceleration.z = static_cast<double>(accel_convert(stream->aacz, ACC_SEN_SCALE));
-    
-    imu_msg.angular_velocity.y = -1 * static_cast<double>(gyro_convert(stream->gyrox, GYRO_SEN_SCALE));
-    imu_msg.angular_velocity.x = static_cast<double>(gyro_convert(stream->gyroy, GYRO_SEN_SCALE));
-    imu_msg.angular_velocity.z = static_cast<double>(gyro_convert(stream->gyroz, GYRO_SEN_SCALE));
+    imu_msg.linear_acceleration.y = -1 * stream->accel_x;
+    imu_msg.linear_acceleration.x = stream->accel_y;
+    imu_msg.linear_acceleration.z = stream->accel_z;
+
+    imu_msg.angular_velocity.y = -1 * stream->gyro_x;
+    imu_msg.angular_velocity.x = stream->gyro_y;
+    imu_msg.angular_velocity.z = stream->gyro_z;
     
     imu_msg.orientation.x = 0.0;
     imu_msg.orientation.y = 0.0;
