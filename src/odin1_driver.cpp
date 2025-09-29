@@ -383,8 +383,8 @@ void Odin1Driver::publishRgb(capture_Image_List_t *stream) {
 
         //Create ROS image message
         auto header = std::make_shared<std_msgs::msg::Header>();
-        header->stamp = ns_to_ros_time(image.timestamp + 719060); // Offset compensation
-        //RCLCPP_INFO(rclcpp::get_logger("device_cb"), "image rgb %ld",image.timestamp + 719060);
+        header->stamp = ns_to_ros_time(image.timestamp); // Offset compensation
+        //RCLCPP_INFO(rclcpp::get_logger("device_cb"), "image rgb %ld",image.timestamp);
         header->frame_id = "camera_rgb_frame";
         auto cv_image = std::make_shared<cv_bridge::CvImage>(*header, "bgr8", bgr);
         auto msg = cv_image->toImageMsg();
@@ -411,14 +411,14 @@ void Odin1Driver::publishRgb(capture_Image_List_t *stream) {
         cv::Mat decoded_image = cv::imdecode(jpeg_data, cv::IMREAD_COLOR);
 
         auto header = std::make_shared<std_msgs::msg::Header>();
-        header->stamp = ns_to_ros_time(image.timestamp + 719060); // Offset compensation
+        header->stamp = ns_to_ros_time(image.timestamp); // Offset compensation
         header->frame_id = "camera_rgb_frame";
         auto cv_image = std::make_shared<cv_bridge::CvImage>(*header, "bgr8", decoded_image);
         rgb_pub_->publish(*(cv_image->toImageMsg()));
 
         // original jpeg
         sensor_msgs::msg::CompressedImage jpeg_msg;
-        jpeg_msg.header.stamp = ns_to_ros_time(stream->imageList[0].timestamp + 719060);
+        jpeg_msg.header.stamp = ns_to_ros_time(stream->imageList[0].timestamp);
         jpeg_msg.format = "jpeg";
         jpeg_msg.data = jpeg_data;
         compressed_rgb_pub_->publish(jpeg_msg);
@@ -456,8 +456,7 @@ void Odin1Driver::publishOdometry(capture_Image_List_t *stream) {
     if (data_len == sizeof(ros_odom_convert_complete_t)) {
 
         ros_odom_convert_complete_t* odom_data = (ros_odom_convert_complete_t*)stream->imageList[0].pAddr;
-        // msg.header.stamp = ns_to_ros_time(odom_data->timestamp_ns); // Problems here, timestamp_ns is not correct
-        msg.header.stamp = this->now();
+        msg.header.stamp = ns_to_ros_time(odom_data->timestamp_ns);
 
         msg.pose.pose.position.x = static_cast<double>(odom_data->pos[0]) / 1e6;
         msg.pose.pose.position.y = static_cast<double>(odom_data->pos[1]) / 1e6;
