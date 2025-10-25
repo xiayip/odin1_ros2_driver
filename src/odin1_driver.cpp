@@ -238,13 +238,13 @@ void Odin1Driver::lidarDeviceCallback(const lidar_device_info_t *device, bool at
             return;
         }
 
-        if (!activeStream(true))
+        if (!activeStream(false))
         {
             RCLCPP_ERROR(rclcpp::get_logger("device_cb"), "Failed to activate stream");
             closeDevice();
             return;
         }
-        RCLCPP_INFO(rclcpp::get_logger("device_cb"), "Stream activated");
+        RCLCPP_INFO(rclcpp::get_logger("device_cb"), "Stream ready to be activated");
     }
     else
     {
