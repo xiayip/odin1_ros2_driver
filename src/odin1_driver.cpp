@@ -99,6 +99,7 @@ void Odin1Driver::setupPublishers()
     xyzrgbacloud_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("odin1/cloud_slam", 10);
     odom_publisher_ = this->create_publisher<nav_msgs::msg::Odometry>("odin1/odometry", 10);
     compressed_rgb_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("odin1/image/compressed", 10);
+    tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
     RCLCPP_INFO(this->get_logger(), "Publishers setup completed.");
 }
 
@@ -296,9 +297,9 @@ void Odin1Driver::lidarDataCallback(const lidar_data_t *data, void *user_data) {
         }
         break;
     case LIDAR_DT_SLAM_ODOMETRY:
-        // if (sendodom_) {
-        //     publishOdometry((capture_Image_List_t *)&data->stream);
-        // }
+        if (sendodom_) {
+            publishBaseToOdomTF((capture_Image_List_t *)&data->stream);
+        }
         break;
     case LIDAR_DT_DEV_STATUS:
         // Handle device status if needed
@@ -306,6 +307,11 @@ void Odin1Driver::lidarDataCallback(const lidar_data_t *data, void *user_data) {
     case LIDAR_DT_SLAM_ODOMETRY_HIGHFREQ:
         if (sendodom_) {
             publishOdometry((capture_Image_List_t *)&data->stream);
+        }
+        break;
+    case LIDAR_DT_SLAM_ODOMETRY_TF:
+        if (sendodom_) {
+            publishOdomToMapTF((capture_Image_List_t *)&data->stream);
         }
         break;
     default:
@@ -462,33 +468,30 @@ void Odin1Driver::publishImu(imu_convert_data_t *stream) {
 }
 
 void Odin1Driver::publishOdometry(capture_Image_List_t *stream) {
-    auto msg = nav_msgs::msg::Odometry();
-    msg.header.frame_id = "map";
-    msg.child_frame_id = "base_link";
+
 
     uint32_t data_len = stream->imageList[0].length;
     if (data_len == sizeof(ros_odom_convert_complete_t)) {
 
         ros_odom_convert_complete_t* odom_data = (ros_odom_convert_complete_t*)stream->imageList[0].pAddr;
-        msg.header.stamp = ns_to_ros_time(odom_data->timestamp_ns);
 
+        auto msg = nav_msgs::msg::Odometry();
+        msg.header.frame_id = "odom";
+        msg.child_frame_id = "odin1_base_link";
+        msg.header.stamp = ns_to_ros_time(odom_data->timestamp_ns);
         msg.pose.pose.position.x = static_cast<double>(odom_data->pos[0]) / 1e6;
         msg.pose.pose.position.y = static_cast<double>(odom_data->pos[1]) / 1e6;
         msg.pose.pose.position.z = static_cast<double>(odom_data->pos[2]) / 1e6;
-
         msg.pose.pose.orientation.x = static_cast<double>(odom_data->orient[0]) / 1e6;
         msg.pose.pose.orientation.y = static_cast<double>(odom_data->orient[1]) / 1e6;
         msg.pose.pose.orientation.z = static_cast<double>(odom_data->orient[2]) / 1e6;
         msg.pose.pose.orientation.w = static_cast<double>(odom_data->orient[3]) / 1e6; // Problems here, orientation quaternion is not correct
-
         msg.twist.twist.linear.x = static_cast<double>(odom_data->linear_velocity[0]) / 1e6;
         msg.twist.twist.linear.y = static_cast<double>(odom_data->linear_velocity[1]) / 1e6;
         msg.twist.twist.linear.z = static_cast<double>(odom_data->linear_velocity[2]) / 1e6;
-
         msg.twist.twist.angular.x = static_cast<double>(odom_data->angular_velocity[0]) / 1e6;
         msg.twist.twist.angular.y = static_cast<double>(odom_data->angular_velocity[1]) / 1e6;
         msg.twist.twist.angular.z = static_cast<double>(odom_data->angular_velocity[2]) / 1e6;
-
         msg.pose.covariance = {
             static_cast<double>(odom_data->cov[0]) / 1e9, static_cast<double>(odom_data->cov[1]) / 1e9, static_cast<double>(odom_data->cov[2]) / 1e9, 0.0, 0.0, 0.0,
             static_cast<double>(odom_data->cov[3]) / 1e9, static_cast<double>(odom_data->cov[4]) / 1e9, static_cast<double>(odom_data->cov[5]) / 1e9, 0.0, 0.0, 0.0,
@@ -499,7 +502,50 @@ void Odin1Driver::publishOdometry(capture_Image_List_t *stream) {
         };
         odom_publisher_->publish(std::move(msg));
     } 
+}
 
+void Odin1Driver::publishOdomToMapTF(capture_Image_List_t* stream) {
+    uint32_t data_len = stream->imageList[0].length;
+    if (data_len == sizeof(ros_odom_convert_complete_t)) {
+        ros_odom_convert_complete_t* odom_data = (ros_odom_convert_complete_t*)stream->imageList[0].pAddr;
+
+        geometry_msgs::msg::TransformStamped tf_msg;
+        tf_msg.header.stamp = ns_to_ros_time(odom_data->timestamp_ns);
+        tf_msg.header.frame_id = "map";
+        tf_msg.child_frame_id = "odom";
+        tf_msg.transform.translation.x = static_cast<double>(odom_data->pos[0]) / 1e6;
+        tf_msg.transform.translation.y = static_cast<double>(odom_data->pos[1]) / 1e6;
+        tf_msg.transform.translation.z = static_cast<double>(odom_data->pos[2]) / 1e6;
+        tf_msg.transform.rotation.x = static_cast<double>(odom_data->orient[0]) / 1e6;
+        tf_msg.transform.rotation.y = static_cast<double>(odom_data->orient[1]) / 1e6;
+        tf_msg.transform.rotation.z = static_cast<double>(odom_data->orient[2]) / 1e6;
+        tf_msg.transform.rotation.w = static_cast<double>(odom_data->orient[3]) / 1e6;
+        tf_broadcaster_->sendTransform(tf_msg);
+    } else {
+        RCLCPP_WARN(this->get_logger(), "Unknown odometry data length: %u", data_len);
+    }
+}
+
+void Odin1Driver::publishBaseToOdomTF(capture_Image_List_t* stream) {
+    uint32_t data_len = stream->imageList[0].length;
+    if (data_len == sizeof(ros_odom_convert_complete_t)) {
+        ros_odom_convert_complete_t* odom_data = (ros_odom_convert_complete_t*)stream->imageList[0].pAddr;
+
+        geometry_msgs::msg::TransformStamped tf_msg;
+        tf_msg.header.stamp = ns_to_ros_time(odom_data->timestamp_ns);
+        tf_msg.header.frame_id = "odom";
+        tf_msg.child_frame_id = "base_link";
+        tf_msg.transform.translation.x = static_cast<double>(odom_data->pos[0]) / 1e6;
+        tf_msg.transform.translation.y = static_cast<double>(odom_data->pos[1]) / 1e6;
+        tf_msg.transform.translation.z = static_cast<double>(odom_data->pos[2]) / 1e6;
+        tf_msg.transform.rotation.x = static_cast<double>(odom_data->orient[0]) / 1e6;
+        tf_msg.transform.rotation.y = static_cast<double>(odom_data->orient[1]) / 1e6;
+        tf_msg.transform.rotation.z = static_cast<double>(odom_data->orient[2]) / 1e6;
+        tf_msg.transform.rotation.w = static_cast<double>(odom_data->orient[3]) / 1e6;
+        tf_broadcaster_->sendTransform(tf_msg);
+    } else {
+        RCLCPP_WARN(this->get_logger(), "Unknown odometry data length: %u", data_len);
+    }
 }
 
 void Odin1Driver::publishIntensityCloud(capture_Image_List_t* stream, int idx) {
@@ -525,7 +571,7 @@ void Odin1Driver::publishIntensityCloud(capture_Image_List_t* stream, int idx) {
     auto msg = std::make_shared<sensor_msgs::msg::PointCloud2>();
 
     // Set message header
-    msg->header.frame_id = "map";
+    msg->header.frame_id = "odin1_base_link";
     msg->header.stamp = ns_to_ros_time(cloud.timestamp);
 
     msg->height = cloud.height;
@@ -620,7 +666,7 @@ void Odin1Driver::publishIntensityCloud(capture_Image_List_t* stream, int idx) {
 void Odin1Driver::publishPC2XYZRGBA(capture_Image_List_t * stream, int idx) {
 
     sensor_msgs::msg::PointCloud2 msg;
-    msg.header.frame_id = "map";
+    msg.header.frame_id = "odom";
     msg.header.stamp = ns_to_ros_time(stream->imageList[0].timestamp);
 
     //RCLCPP_INFO(rclcpp::get_logger("device_cb"), "Point cloudrgba %ld",stream->imageList[0].timestamp);

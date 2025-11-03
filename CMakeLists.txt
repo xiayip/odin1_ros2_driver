@@ -22,6 +22,8 @@ set(dependencies
   Threads
   Eigen3
   yaml-cpp
+  tf2_ros
+  tf2_geometry_msgs
 )
 
 foreach (dep IN LISTS dependencies)

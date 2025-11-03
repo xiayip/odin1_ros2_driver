@@ -152,7 +152,7 @@ void render(const sensor_msgs::msg::Image::ConstSharedPtr &image_msg,
 
     // Prepare output cloud with maximum possible size
     output_cloud = std::make_shared<sensor_msgs::msg::PointCloud2>();
-    output_cloud->header.frame_id = "map";
+    output_cloud->header.frame_id = "odin1_base_link";
     output_cloud->header.stamp = image_msg->header.stamp;
     output_cloud->height = 1;
     output_cloud->width = cloud_msg->width * cloud_msg->height; // Start with max size
