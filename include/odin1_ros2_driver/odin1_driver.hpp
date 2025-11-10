@@ -13,9 +13,9 @@ limitations under the License.
 #pragma once
 
 #include "rclcpp/rclcpp.hpp"
-#include "message_filters/subscriber.h"
-#include "message_filters/synchronizer.h"
-#include "message_filters/sync_policies/approximate_time.h"
+#include "message_filters/subscriber.hpp"
+#include "message_filters/synchronizer.hpp"
+#include "message_filters/sync_policies/approximate_time.hpp"
 
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/image.hpp"
@@ -24,10 +24,11 @@ limitations under the License.
 #include "nav_msgs/msg/odometry.hpp"
 #include "std_srvs/srv/set_bool.hpp"
 #include "tf2_ros/transform_broadcaster.h"
-#include "tf2_geometry_msgs/tf2_geometry_msgs.h"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
 #include "lidar_api_type.h"
 #include "odin1_ros2_driver/rawCloudRender.h"
+#include "odin1_ros2_driver/srv/save_map.hpp"
 
 namespace odin1_ros2_driver
 {
@@ -42,6 +43,7 @@ public:
 
 private:
     bool init();
+    bool checkUsbConnection();
     void loadParameters();
     void setupPublishers();
     void setupServices();
@@ -66,6 +68,8 @@ private:
     // service callbacks
     void streamControlCallback(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
                               std::shared_ptr<std_srvs::srv::SetBool::Response> response);
+    void saveMapCallback(const std::shared_ptr<odin1_ros2_driver::srv::SaveMap::Request> request,
+                         std::shared_ptr<odin1_ros2_driver::srv::SaveMap::Response> response);
 
     // device
     device_handle odin_device_;
@@ -74,7 +78,8 @@ private:
     // render
     std::shared_ptr<rawCloudRender> render_;
     // Parameters
-    int streamctrl_, sendrgb_, sendimu_, sendodom_, senddtof_, sendcloudslam_, sendcloudrender_, sendrgbcompressed_, senddepth_, recorddata_;
+    int streamctrl_, sendrgb_, sendimu_, sendodom_, senddtof_, sendcloudslam_, sendcloudrender_, sendrgbcompressed_, senddepth_, recorddata_, custom_map_mode_;
+    std::string relocalization_map_abs_path_;
     // Publishers
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr rgb_pub_;
@@ -93,6 +98,6 @@ private:
     std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
     // Services
     rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr stream_control_service_;
-    // 
+    rclcpp::Service<odin1_ros2_driver::srv::SaveMap>::SharedPtr save_map_service_;
 };
 } // namespace odin1_ros2_driver

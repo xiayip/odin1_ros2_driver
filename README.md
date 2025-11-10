@@ -87,6 +87,12 @@ ros2 service call /odin1/stream_control std_srvs/srv/SetBool "data: true"
 ros2 service call /odin1/stream_control std_srvs/srv/SetBool "data: false"
 ```
 
+### Saving Map Service
+To save the current SLAM map to a file, use the following service:
+```bash
+ros2 service call /odin1/save_map odin1_ros2_driver/srv/SaveMap "{name: {data: '/home/admin/map.bin'}}"
+```
+
 ### Configuration
 Edit `config/control_command.yaml` to customize driver parameters:
 - Stream types (RGB, IMU, odometry, point clouds)

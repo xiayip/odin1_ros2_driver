@@ -89,16 +89,4 @@ inline uint64_t ros_time_to_ns(const rclcpp::Time &t) {
     return static_cast<uint64_t>(t.seconds() * 1e9);
 }
 
-#define GD_ACCL_G 9.7833f
-#define ACC_1G_ms2 9.8
-#define ACC_SEN_SCALE 4096
-#define PAI 3.14159265358979323846
-#define GYRO_SEN_SCALE 16.4f
 #define DTOF_NUM_ROW_PER_GROUP 6
-// Common functions
-inline float accel_convert(int16_t raw, int sen_scale) {
-    return (raw * GD_ACCL_G / sen_scale);
-}
-inline float gyro_convert(int16_t raw, float sen_scale) {
-    return (raw * PAI) / (sen_scale * 180); 
-}
