@@ -24,6 +24,8 @@ set(dependencies
   yaml-cpp
   tf2_ros
   tf2_geometry_msgs
+  std_msgs
+  rosidl_default_generators
 )
 
 foreach (dep IN LISTS dependencies)
@@ -68,15 +70,23 @@ set(COMMON_LIBRARIES
   dl
 )
 
-set(COMPONENT_SOURCE_FILES
-  src/odin1_driver.cpp
+# generate ros2 msg files
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "srv/SaveMap.srv"
+  DEPENDENCIES builtin_interfaces std_msgs
 )
 
+# Export the interface dependencies before building targets
+ament_export_dependencies(rosidl_default_runtime)
+
+# Get typesupport target
+rosidl_get_typesupport_target(cpp_typesupport_target "${PROJECT_NAME}" "rosidl_typesupport_cpp")
+
 # Create shared library for main component
-add_library(odin1_ros2_driver_component SHARED ${COMPONENT_SOURCE_FILES})
+add_library(odin1_ros2_driver_component SHARED src/odin1_driver.cpp)
 ament_target_dependencies(odin1_ros2_driver_component ${dependencies})
 target_include_directories(odin1_ros2_driver_component PUBLIC ${COMMON_INCLUDE_DIRS})
-target_link_libraries(odin1_ros2_driver_component ${COMMON_LIBRARIES})
+target_link_libraries(odin1_ros2_driver_component ${COMMON_LIBRARIES} ${cpp_typesupport_target})
 rclcpp_components_register_nodes(odin1_ros2_driver_component "odin1_ros2_driver::Odin1Driver")
 
 # Create standalone executable

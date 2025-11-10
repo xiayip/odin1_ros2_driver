@@ -14,6 +14,7 @@
 #include <memory>
 #include <thread>
 #include <chrono>
+#include <filesystem>
 #include "std_srvs/srv/set_bool.hpp"
 
 namespace odin1_ros2_driver
@@ -40,8 +41,12 @@ Odin1Driver::Odin1Driver(rclcpp::NodeOptions options)
     // Register signal handler for graceful shutdown
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
-    
-    init();
+
+    if (!init()) {
+        RCLCPP_ERROR(this->get_logger(), "Failed to initialize Odin1 ROS2 Driver Node.");
+        rclcpp::shutdown();
+        return;
+    }
     RCLCPP_INFO(this->get_logger(), "Odin1 ROS2 Driver Node has been started.");
 }
 
@@ -54,12 +59,29 @@ Odin1Driver::~Odin1Driver()
 
 bool Odin1Driver::init()
 {
+    if (!checkUsbConnection())
+    {
+        RCLCPP_FATAL(this->get_logger(), "Device Not Connected, or connected to USB 2.0 port. Please connect to USB 3.0 or higher port.");
+        return false;
+    }
     loadParameters();
     setupPublishers();
     setupServices();
     setupSDKCallbacks();
     setupMessageFilters();
     RCLCPP_INFO(this->get_logger(), "Publishers initialized.");
+    return true;
+}
+
+bool Odin1Driver::checkUsbConnection()
+{
+    if (!isUsb3OrHigher(TARGET_VENDOR, TARGET_PRODUCT))
+    {
+        RCLCPP_FATAL(this->get_logger(),
+                        "Device Not Connected, or connected to USB 2.0 port. Please connect to USB 3.0 or higher port.");
+        return false;
+    }
+    RCLCPP_INFO(this->get_logger(), "Device connected to USB 3.0 or higher port.");
     return true;
 }
 
@@ -75,6 +97,8 @@ void Odin1Driver::loadParameters()
     this->declare_parameter("sendrgbcompressed", 0);
     this->declare_parameter("senddepth", 0);
     this->declare_parameter("recorddata", 0);
+    this->declare_parameter("custom_map_mode", 0);
+    this->declare_parameter("relocalization_map_abs_path", "");
 
     this->get_parameter("streamctrl", streamctrl_);
     this->get_parameter("sendrgb", sendrgb_);
@@ -86,9 +110,11 @@ void Odin1Driver::loadParameters()
     this->get_parameter("sendrgbcompressed", sendrgbcompressed_);
     this->get_parameter("senddepth", senddepth_);
     this->get_parameter("recorddata", recorddata_);
+    this->get_parameter("custom_map_mode", custom_map_mode_);
+    this->get_parameter("relocalization_map_abs_path", relocalization_map_abs_path_);
 
-    RCLCPP_INFO(this->get_logger(), "Parameters loaded, streamctrl: %d, sendrgb: %d, sendimu: %d, sendodom: %d, senddtof: %d, sendcloudslam: %d, sendcloudrender: %d, sendrgbcompressed: %d, senddepth: %d, recorddata: %d",
-                streamctrl_, sendrgb_, sendimu_, sendodom_, senddtof_, sendcloudslam_, sendcloudrender_, sendrgbcompressed_, senddepth_, recorddata_);
+    RCLCPP_INFO(this->get_logger(), "Parameters loaded, streamctrl: %d, sendrgb: %d, sendimu: %d, sendodom: %d, senddtof: %d, sendcloudslam: %d, sendcloudrender: %d, sendrgbcompressed: %d, senddepth: %d, recorddata: %d, custom_map_mode: %d",
+                streamctrl_, sendrgb_, sendimu_, sendodom_, senddtof_, sendcloudslam_, sendcloudrender_, sendrgbcompressed_, senddepth_, recorddata_, custom_map_mode_);
 }
 
 void Odin1Driver::setupPublishers()
@@ -109,15 +135,19 @@ void Odin1Driver::setupServices()
         "odin1/stream_control",
         std::bind(&Odin1Driver::streamControlCallback, this, std::placeholders::_1, std::placeholders::_2)
     );
+    save_map_service_ = this->create_service<odin1_ros2_driver::srv::SaveMap>(
+        "odin1/save_map",
+        std::bind(&Odin1Driver::saveMapCallback, this, std::placeholders::_1, std::placeholders::_2));
     RCLCPP_INFO(this->get_logger(), "Services setup completed.");
 }
 
 bool Odin1Driver::setupSDKCallbacks()
 {
     lidar_log_set_level(LIDAR_LOG_DEBUG);
-    if (lidar_system_init(&Odin1Driver::lidarDeviceCallbackStatic))
+    auto res = lidar_system_init(&Odin1Driver::lidarDeviceCallbackStatic);
+    if (res != 0)
     {
-        RCLCPP_ERROR(this->get_logger(), "Lidar system init failed");
+        RCLCPP_ERROR(this->get_logger(), "Lidar system init failed, error code: %d", res);
         return false;
     }
 
@@ -179,15 +209,6 @@ void Odin1Driver::lidarDeviceCallback(const lidar_device_info_t *device, bool at
 
     if (attach == true)
     {
-        RCLCPP_INFO(rclcpp::get_logger("device_cb"), "Hardware connected, starting software connection...");
-        if (!isUsb3OrHigher(TARGET_VENDOR, TARGET_PRODUCT))
-        {
-            RCLCPP_FATAL(rclcpp::get_logger("device_cb"),
-                            "Device connected to USB 2.0 port. This device requires USB 3.0 or higher. Exiting program.");
-            return;
-        }
-        RCLCPP_INFO(rclcpp::get_logger("device_cb"), "Device connected to USB 3.0 or higher port.");
-
         if (lidar_create_device(const_cast<lidar_device_info_t *>(device), &odin_device_))
         {
             RCLCPP_ERROR(rclcpp::get_logger("device_cb"), "Create device failed");
@@ -228,6 +249,18 @@ void Odin1Driver::lidarDeviceCallback(const lidar_device_info_t *device, bool at
         }
         RCLCPP_INFO(rclcpp::get_logger("device_cb"), "Software connection successful");
 
+        // set relocalization map if in relocalization mode
+        if (custom_map_mode_ == 2) {
+            if (relocalization_map_abs_path_.empty() || 
+                !std::filesystem::exists(relocalization_map_abs_path_) ||
+                lidar_set_relocalization_map(odin_device_, relocalization_map_abs_path_.c_str()) != 0) {
+                RCLCPP_ERROR(rclcpp::get_logger("device_cb"), "Relocalization map path invalid or setting map failed: %s", relocalization_map_abs_path_.c_str());
+                closeDevice();
+                return;
+            }
+            RCLCPP_INFO(rclcpp::get_logger("device_cb"), "Relocalization map set successfully");
+        }
+
         lidar_data_callback_info_t data_callback_info;
         data_callback_info.data_callback = lidarDataCallbackStatic;
         data_callback_info.user_data = &odin_device_;
@@ -245,7 +278,7 @@ void Odin1Driver::lidarDeviceCallback(const lidar_device_info_t *device, bool at
             closeDevice();
             return;
         }
-        RCLCPP_INFO(rclcpp::get_logger("device_cb"), "Stream ready to be activated");
+        RCLCPP_INFO(rclcpp::get_logger("device_cb"), "Stream ready to be activated, start streaming by:\nros2 service call /odin1/stream_control std_srvs/srv/SetBool \"data: true\"");
     }
     else
     {
@@ -264,8 +297,7 @@ void Odin1Driver::lidarDataCallbackStatic(const lidar_data_t *data, void *user_d
 }
 
 void Odin1Driver::lidarDataCallback(const lidar_data_t *data, void *user_data) {
-    device_handle *dev_handle = static_cast<device_handle *>(user_data);
-    if(!dev_handle || !data) {
+    if(!user_data || !data) {
         RCLCPP_WARN(this->get_logger(), "Invalid device handle or data.");
         return;
     }
@@ -374,6 +406,69 @@ void Odin1Driver::streamControlCallback(const std::shared_ptr<std_srvs::srv::Set
     response->message = response->success ? "Stream control successful" : "Stream control failed";
 }
 
+void Odin1Driver::saveMapCallback(const std::shared_ptr<odin1_ros2_driver::srv::SaveMap::Request> request,
+                                    std::shared_ptr<odin1_ros2_driver::srv::SaveMap::Response> response)
+{
+    RCLCPP_INFO(this->get_logger(), "Received request to save map to: %s", request->name.data.c_str());
+    if (!odin_device_)
+    {
+        RCLCPP_ERROR(this->get_logger(), "Device handle is null, cannot save map.");
+        response->result = 255;
+        return;
+    }
+    // start saving map by setting save_map parameter to 1
+    int save_flag_value = 1;
+    int init_saving_res = lidar_set_custom_parameter(odin_device_, "save_map", &save_flag_value, sizeof(int));
+    if (init_saving_res != 0)
+    {
+        RCLCPP_ERROR(this->get_logger(), "Failed to initiate map saving, error code: %d", init_saving_res);
+        response->result = 255;
+        return;
+    }
+    RCLCPP_INFO(this->get_logger(), "Map saving initiated on device.");
+    // wait for device to complete saving: last_save_map_val == 1 && save_map == 0
+    int last_save_map_val = -1;
+    while (true) // timeout can be added if needed
+    {
+        int current_save_map_value = 0;
+        int get_param_res = lidar_get_custom_parameter(odin_device_, "save_map", &current_save_map_value);
+        if (get_param_res != 0)
+        {
+            RCLCPP_ERROR(this->get_logger(), "Failed to get save_map parameter, error code: %d", get_param_res);
+            response->result = 255;
+            return;
+        }
+        if (last_save_map_val == 1 && current_save_map_value == 0)
+        {
+            break; // saving completed
+        }
+        last_save_map_val = current_save_map_value;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    RCLCPP_INFO(this->get_logger(), "Map saving completed on device, starting transfer.");
+    // download the saved map
+    std::string map_path = request->name.data;
+    size_t last_slash_pos = map_path.find_last_of("/\\");
+    std::string folder = ".";
+    std::string filename = "map.bin";
+    if (last_slash_pos != std::string::npos)
+    {
+        folder = map_path.substr(0, last_slash_pos);
+        filename = map_path.substr(last_slash_pos + 1);
+    }
+    // ensure folder exists
+    std::filesystem::create_directories(folder);
+    int download_res = lidar_get_mapping_result(odin_device_, folder.c_str(), filename.c_str());
+    if (download_res != 0)
+    {
+        RCLCPP_ERROR(this->get_logger(), "Failed to download mapping result, error code: %d", download_res);
+        response->result = 255;
+        return;
+    }
+    RCLCPP_INFO(this->get_logger(), "Map saving completed successfully.");
+    response->result = 0;
+}
+
 void Odin1Driver::closeDevice() {
     if (odin_device_)
     {
@@ -468,8 +563,6 @@ void Odin1Driver::publishImu(imu_convert_data_t *stream) {
 }
 
 void Odin1Driver::publishOdometry(capture_Image_List_t *stream) {
-
-
     uint32_t data_len = stream->imageList[0].length;
     if (data_len == sizeof(ros_odom_convert_complete_t)) {
 
