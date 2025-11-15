@@ -627,7 +627,7 @@ void Odin1Driver::publishBaseToOdomTF(capture_Image_List_t* stream) {
         geometry_msgs::msg::TransformStamped tf_msg;
         tf_msg.header.stamp = ns_to_ros_time(odom_data->timestamp_ns);
         tf_msg.header.frame_id = "odom";
-        tf_msg.child_frame_id = "base_link";
+        tf_msg.child_frame_id = "odin1_base_link";
         tf_msg.transform.translation.x = static_cast<double>(odom_data->pos[0]) / 1e6;
         tf_msg.transform.translation.y = static_cast<double>(odom_data->pos[1]) / 1e6;
         tf_msg.transform.translation.z = static_cast<double>(odom_data->pos[2]) / 1e6;
