@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<robot name="odin1">
+
+  <!-- Base link (physical sensor body) -->
+  <link name="odin1_base_link">
+    <visual>
+        <origin xyz="0 0 0" rpy="-1.5707 0 -1.5707" />
+        <geometry>
+            <mesh filename="package://odin1_ros2_driver/description/Odin1.dae" scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="">
+          <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+        </material>
+    </visual>
+  </link>
+
+  <!-- IMU frame -->
+  <!-- <joint name="odin1_base_to_odin1_imu_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="odin1_base_link"/>
+    <child link="odin1_imu_link"/>
+  </joint>
+
+  <link name="odin1_imu_link"/> -->
+
+  <!-- Camera RGB frame -->
+  <!-- <joint name="odin1_base_to_camera_rgb_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="odin1_base_link"/>
+    <child link="camera_rgb_frame"/>
+  </joint>
+
+  <link name="camera_rgb_frame"/> -->
+
+</robot>

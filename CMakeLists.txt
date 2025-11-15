@@ -105,7 +105,7 @@ install(DIRECTORY include/
   DESTINATION include/${PROJECT_NAME}
 )
 
-install(DIRECTORY launch config rviz SDK
+install(DIRECTORY launch config rviz SDK description
   DESTINATION share/${PROJECT_NAME}/
 )
 

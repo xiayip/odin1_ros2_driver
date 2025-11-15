@@ -8,18 +8,21 @@ for controlling various sensor outputs (RGB, IMU, odometry, point clouds, etc.).
 
 import os
 from launch import LaunchDescription
-from launch.substitutions import PathJoinSubstitution
+from launch.substitutions import PathJoinSubstitution, Command
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
-from ament_index_python.packages import get_package_share_directory
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
+    # read rviz argument
+    rviz_arg = LaunchConfiguration('rviz', default='false')
+    
     # Package directory
     pkg_share = FindPackageShare('odin1_ros2_driver')
 
     config_file_path = PathJoinSubstitution([pkg_share, 'config', 'control_command.yaml'])
-
     # Odin1 ROS2 Driver Node
     odin1_driver_node = Node(
         package='odin1_ros2_driver',
@@ -28,7 +31,37 @@ def generate_launch_description():
         parameters=[config_file_path],
         output='screen',
     )
+    
+    # Get the URDF file path
+    urdf_file_path = PathJoinSubstitution(
+        [pkg_share, 'description', 'odin1_description.urdf']
+    )
+    robot_description_content = Command(['cat ', urdf_file_path])
+    robot_description = {"robot_description": robot_description_content}
+    robot_state_publisher_node = Node(
+        package="robot_state_publisher",
+        executable="robot_state_publisher",
+        output="both",
+        parameters=[robot_description],
+        condition=IfCondition(rviz_arg),
+    )
+    
+    # run rviz2 if needed
+    rviz_config_file = PathJoinSubstitution(
+        [pkg_share, 'rviz', 'odin_ros2.rviz']
+    )
+    rviz_node = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2',
+        output='screen',
+        arguments=['-d', rviz_config_file],
+        parameters=[robot_description],
+        condition=IfCondition(rviz_arg),
+    )
 
     return LaunchDescription([
         odin1_driver_node,
+        robot_state_publisher_node,
+        rviz_node,
     ])
