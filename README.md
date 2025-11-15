@@ -1,21 +1,23 @@
 # Odin1_ROS2_Driver
 
-Modern ROS2 driver for Odin1 LIDAR/camera sensor modules with advanced composable node architecture.
+Modern ROS2 driver for Odin1 LIDAR/camera sensor modules with advanced composable node architecture and real-time incremental mapping.
 
 ## Overview
 
 This ROS2 driver provides comprehensive support for Odin1 sensor modules, featuring:
 - **Composable Node Architecture** - Efficient memory usage and flexible deployment
+- **Incremental Point Cloud Mapping** - Real-time novelty detection and map accumulation
 - **RGB-PointCloud Fusion** - Real-time fusion of camera and LIDAR data
 - **Runtime Stream Control** - Service-based control of data streams
 - **Multi-format Support** - Raw and compressed image publishing
 - **SLAM Integration** - Odometry and SLAM point cloud support
+- **Intelligent Color Handling** - Automatic RGB/Intensity-based point cloud coloring
 
 **Compatibility:** ROS2 Humble (Ubuntu 22.04)
 
 ## Version
 
-Current Version: v1.0.0
+Current Version: v1.1.0
 
 ## Requirements
 
@@ -25,10 +27,14 @@ Current Version: v1.0.0
 ### Dependencies
 - **ROS2 Humble** - Core ROS2 framework
 - **OpenCV >= 4.5.0** - Computer vision library
+- **PCL (Point Cloud Library)** - Point cloud processing and octree spatial indexing
+- **pcl_conversions** - PCL-ROS2 message conversion
+- **pcl_ros** - ROS2 integration for PCL
 - **yaml-cpp** - YAML configuration parsing  
 - **Eigen3** - Linear algebra library
 - **cv_bridge** - ROS2-OpenCV integration
 - **message_filters** - Message synchronization
+- **rclcpp_components** - Composable node support
 
 ## Installation
 
@@ -37,7 +43,8 @@ Current Version: v1.0.0
 sudo apt update
 sudo apt install -y build-essential cmake git libgtk2.0-dev pkg-config \
     libavcodec-dev libavformat-dev libswscale-dev libyaml-cpp-dev \
-    libusb-1.0-0-dev libopencv-dev libeigen3-dev
+    libusb-1.0-0-dev libopencv-dev libeigen3-dev \
+    libpcl-dev ros-humble-pcl-conversions ros-humble-pcl-ros
 ```
 
 ### 2. Install ROS2 Humble
@@ -70,10 +77,13 @@ source install/setup.bash
 ### Quick Start
 ```bash
 # Launch the driver with default configuration
-ros2 launch odin1_ros2_driver odin1_ros2_driver.launch.py
+ros2 launch odin1_ros2_driver odin1_ros2_driver.launch.py rviz:=true
 
 # Launch as composable node (recommended for production)
-ros2 launch odin1_ros2_driver odin1_composable.launch.py
+ros2 launch odin1_ros2_driver odin1_composable.launch.py rviz:=true
+
+# Launch with incremental point cloud mapping (NEW!)
+ros2 launch odin1_ros2_driver odin1_with_incremental_points.launch.py rviz:=true
 ```
 
 ### Runtime Control
@@ -110,20 +120,27 @@ odin1_ros2_driver/
 │   └── lib/                   # Platform-specific libraries
 ├── config/
 │   └── control_command.yaml   # Driver configuration
+├── description/
+│   └── odin1_description.urdf # Robot description for TF frames
 ├── include/odin1_ros2_driver/
 │   ├── odin1_driver.hpp       # Main driver class
+│   ├── incremental_map_node.hpp  # Incremental mapping node (NEW)
 │   ├── helper.hpp             # Utility functions
 │   └── rawCloudRender.h       # Point cloud rendering
 ├── launch/
-│   ├── odin1_ros2_driver.launch.py    # Standard node launch
-│   └── odin1_composable.launch.py     # Composable node launch
+│   ├── odin1_ros2_driver.launch.py           # Standard node launch
+│   ├── odin1_composable.launch.py            # Composable node launch
+│   └── odin1_with_incremental_points.launch.py  # With mapping (NEW)
 ├── src/
 │   ├── odin1_driver.cpp       # Main driver implementation
 │   ├── odin1_driver_node.cpp  # Node executable
+│   └── incremental_map_node.cpp  # Incremental mapping implementation (NEW)
+├── srv/
+│   └── SaveMap.srv            # Custom service for saving maps
 └── rviz/                      # RVIZ configurations
+    └── odin_ros2_Increment_pl.rviz  # Incremental mapping visualization (NEW)
 ```
 
-**Total:** 5 files, 1,111 lines of C++ code
 
 
 ## ROS2 Topics and Services
@@ -137,15 +154,19 @@ odin1_ros2_driver/
 | `/odin1/cloud_raw` | `sensor_msgs/msg/PointCloud2` | Raw LIDAR point cloud |
 | `/odin1/cloud_render` | `sensor_msgs/msg/PointCloud2` | RGB-fused point cloud |
 | `/odin1/cloud_slam` | `sensor_msgs/msg/PointCloud2` | SLAM-processed point cloud |
+| `/odin1/cloud_incremental` | `sensor_msgs/msg/PointCloud2` | **NEW**: Incremental points (novelty only) |
+| `/odin1/cloud_accumulated` | `sensor_msgs/msg/PointCloud2` | **NEW**: Accumulated map (full history) |
 | `/odin1/odometry` | `nav_msgs/msg/Odometry` | SLAM odometry data |
 
 ### Services
 | Service Name | Service Type | Description |
 |--------------|--------------|-------------|
 | `/odin1/stream_control` | `std_srvs/srv/SetBool` | Start/stop data streaming |
+| `/odin1/save_map` | `odin1_ros2_driver/srv/SaveMap` | Save current SLAM map to file |
 
 ### Parameters
-Configure these parameters in `config/control_command.yaml`:
+
+#### Driver Parameters (config/control_command.yaml)
 - `streamctrl`: Enable/disable stream control (default: 1)
 - `sendrgb`: Publish RGB images (default: 1)  
 - `sendimu`: Publish IMU data (default: 1)
@@ -153,6 +174,13 @@ Configure these parameters in `config/control_command.yaml`:
 - `senddtof`: Publish raw point cloud (default: 1)
 - `sendcloudslam`: Publish SLAM point cloud (default: 0)
 - `sendcloudrender`: Enable RGB-point cloud fusion (default: 0)
+
+#### Incremental Mapping Parameters **NEW**
+Configure via launch file or command line:
+- `voxel_leaf_size` (double): Voxel grid size for downsampling (default: 0.01m)
+- `octree_resolution` (double): Octree spatial index resolution (default: 0.02m)  
+- `novelty_threshold` (double): Distance threshold for novelty detection (default: 0.02m)
+- `max_accumulated_points` (int): Max points before auto-downsample (default: 1,000,000)
 
 ## Troubleshooting
 

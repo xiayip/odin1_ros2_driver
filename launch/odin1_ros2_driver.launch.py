@@ -16,8 +16,6 @@ from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
-    # read rviz argument
-    rviz_arg = LaunchConfiguration('rviz', default='false')
     
     # Package directory
     pkg_share = FindPackageShare('odin1_ros2_driver')
@@ -47,6 +45,7 @@ def generate_launch_description():
     )
     
     # run rviz2 if needed
+    rviz_arg = LaunchConfiguration('rviz', default='false')
     rviz_config_file = PathJoinSubstitution(
         [pkg_share, 'rviz', 'odin_ros2.rviz']
     )

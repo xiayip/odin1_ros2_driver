@@ -26,6 +26,9 @@ set(dependencies
   tf2_geometry_msgs
   std_msgs
   rosidl_default_generators
+  PCL
+  pcl_conversions
+  pcl_ros
 )
 
 foreach (dep IN LISTS dependencies)
@@ -95,7 +98,14 @@ ament_target_dependencies(odin1_ros2_driver_node ${dependencies})
 target_include_directories(odin1_ros2_driver_node PUBLIC ${COMMON_INCLUDE_DIRS})
 target_link_libraries(odin1_ros2_driver_node odin1_ros2_driver_component)
 
-install(TARGETS odin1_ros2_driver_component odin1_ros2_driver_node
+# Create incremental map composable node
+add_library(incremental_map_component SHARED src/incremental_map_node.cpp)
+ament_target_dependencies(incremental_map_component ${dependencies})
+target_include_directories(incremental_map_component PUBLIC ${COMMON_INCLUDE_DIRS})
+target_link_libraries(incremental_map_component ${PCL_LIBRARIES})
+rclcpp_components_register_nodes(incremental_map_component "odin1_ros2_driver::IncrementalMapNode")
+
+install(TARGETS odin1_ros2_driver_component odin1_ros2_driver_node incremental_map_component
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
