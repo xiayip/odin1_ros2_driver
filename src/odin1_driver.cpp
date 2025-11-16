@@ -34,7 +34,7 @@ void signalHandler(int signum) {
 }
 
 Odin1Driver::Odin1Driver(rclcpp::NodeOptions options)
-    : Node("odin1_ros2_driver", options), odin_device_(nullptr), slam_mode_(LIDAR_MODE_SLAM), stream_active_(false)
+    : Node("odin1_ros2_driver", options), odin_device_(nullptr), slam_mode_(LIDAR_MODE_SLAM), stream_active_(false), cloud_callback_count_(0)
 {
     g_driver_instance = this; // Set global instance for static callback
     
@@ -99,6 +99,13 @@ void Odin1Driver::loadParameters()
     this->declare_parameter("recorddata", 0);
     this->declare_parameter("custom_map_mode", 0);
     this->declare_parameter("relocalization_map_abs_path", "");
+    
+    // Incremental map parameters
+    this->declare_parameter("enable_incremental_map", false);
+    this->declare_parameter("incremental_map_octree_resolution", 0.05);
+    this->declare_parameter("incremental_map_voxel_size", 0.0);
+    this->declare_parameter("incremental_map_novelty_threshold", 0.05);
+    this->declare_parameter("incremental_map_max_points", 5000000);
 
     this->get_parameter("streamctrl", streamctrl_);
     this->get_parameter("sendrgb", sendrgb_);
@@ -112,9 +119,29 @@ void Odin1Driver::loadParameters()
     this->get_parameter("recorddata", recorddata_);
     this->get_parameter("custom_map_mode", custom_map_mode_);
     this->get_parameter("relocalization_map_abs_path", relocalization_map_abs_path_);
+    
+    this->get_parameter("enable_incremental_map", enable_incremental_map_);
+    this->get_parameter("incremental_map_octree_resolution", incremental_map_octree_resolution_);
+    this->get_parameter("incremental_map_voxel_size", incremental_map_voxel_size_);
+    this->get_parameter("incremental_map_novelty_threshold", incremental_map_novelty_threshold_);
+    int temp_max_points;
+    this->get_parameter("incremental_map_max_points", temp_max_points);
+    incremental_map_max_points_ = static_cast<size_t>(temp_max_points);
 
     RCLCPP_INFO(this->get_logger(), "Parameters loaded, streamctrl: %d, sendrgb: %d, sendimu: %d, sendodom: %d, senddtof: %d, sendcloudslam: %d, sendcloudrender: %d, sendrgbcompressed: %d, senddepth: %d, recorddata: %d, custom_map_mode: %d",
                 streamctrl_, sendrgb_, sendimu_, sendodom_, senddtof_, sendcloudslam_, sendcloudrender_, sendrgbcompressed_, senddepth_, recorddata_, custom_map_mode_);
+    
+    // Initialize incremental map manager if enabled
+    if (enable_incremental_map_) {
+        incremental_map_manager_ = std::make_unique<IncrementalMapManager>(
+            this->get_logger(),
+            incremental_map_octree_resolution_,
+            incremental_map_voxel_size_,
+            incremental_map_novelty_threshold_,
+            incremental_map_max_points_
+        );
+        RCLCPP_INFO(this->get_logger(), "Incremental map enabled");
+    }
 }
 
 void Odin1Driver::setupPublishers()
@@ -126,6 +153,13 @@ void Odin1Driver::setupPublishers()
     odom_publisher_ = this->create_publisher<nav_msgs::msg::Odometry>("odin1/odometry", 10);
     compressed_rgb_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("odin1/image/compressed", 10);
     tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
+    
+    // Incremental map publishers
+    if (enable_incremental_map_) {
+        incremental_cloud_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("odin1/cloud_incremental", 10);
+        accumulated_map_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("odin1/cloud_accumulated", 10);
+    }
+    
     RCLCPP_INFO(this->get_logger(), "Publishers setup completed.");
 }
 
@@ -138,6 +172,15 @@ void Odin1Driver::setupServices()
     save_map_service_ = this->create_service<odin1_ros2_driver::srv::SaveMap>(
         "odin1/save_map",
         std::bind(&Odin1Driver::saveMapCallback, this, std::placeholders::_1, std::placeholders::_2));
+    
+    // Incremental map service
+    if (enable_incremental_map_) {
+        clear_incremental_map_service_ = this->create_service<std_srvs::srv::SetBool>(
+            "odin1/clear_incremental_map",
+            std::bind(&Odin1Driver::clearIncrementalMapCallback, this, std::placeholders::_1, std::placeholders::_2)
+        );
+    }
+    
     RCLCPP_INFO(this->get_logger(), "Services setup completed.");
 }
 
@@ -404,6 +447,30 @@ void Odin1Driver::streamControlCallback(const std::shared_ptr<std_srvs::srv::Set
     }
     response->success = activeStream(request->data);
     response->message = response->success ? "Stream control successful" : "Stream control failed";
+}
+
+void Odin1Driver::clearIncrementalMapCallback(
+    const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+    std::shared_ptr<std_srvs::srv::SetBool::Response> response)
+{
+    if (!enable_incremental_map_ || !incremental_map_manager_) {
+        response->success = false;
+        response->message = "Incremental map is not enabled";
+        return;
+    }
+    
+    if (request->data) {
+        incremental_map_manager_->clear();
+        cloud_callback_count_ = 0;
+        response->success = true;
+        response->message = "Incremental map cleared successfully";
+        RCLCPP_INFO(this->get_logger(), "Incremental map cleared via service call");
+    } else {
+        // Log statistics without clearing
+        incremental_map_manager_->logStatistics();
+        response->success = true;
+        response->message = "Statistics logged";
+    }
 }
 
 void Odin1Driver::saveMapCallback(const std::shared_ptr<odin1_ros2_driver::srv::SaveMap::Request> request,
@@ -757,60 +824,100 @@ void Odin1Driver::publishIntensityCloud(capture_Image_List_t* stream, int idx) {
 }
 
 void Odin1Driver::publishPC2XYZRGBA(capture_Image_List_t * stream, int idx) {
-
-    sensor_msgs::msg::PointCloud2 msg;
-    msg.header.frame_id = "odom";
-    msg.header.stamp = ns_to_ros_time(stream->imageList[0].timestamp);
-
-    //RCLCPP_INFO(rclcpp::get_logger("device_cb"), "Point cloudrgba %ld",stream->imageList[0].timestamp);
-
     size_t pt_size = sizeof(int32_t) * 3 + sizeof(int32_t) * 4;
     uint32_t points = stream->imageList[idx].length / pt_size;
-
-    msg.height = 1;
-    msg.width = points;
-    msg.is_dense = false;
-
-    sensor_msgs::PointCloud2Modifier modifier(msg);
-    modifier.setPointCloud2Fields(
-        4,
-        "x", 1, sensor_msgs::msg::PointField::FLOAT32,
-        "y", 1, sensor_msgs::msg::PointField::FLOAT32,
-        "z", 1, sensor_msgs::msg::PointField::FLOAT32,
-        "rgb", 1, sensor_msgs::msg::PointField::FLOAT32
-    );
-    modifier.resize(msg.width * msg.height);
-
-    sensor_msgs::PointCloud2Iterator<float> iter_x(msg, "x");
-    sensor_msgs::PointCloud2Iterator<float> iter_y(msg, "y");
-    sensor_msgs::PointCloud2Iterator<float> iter_z(msg, "z");
-    sensor_msgs::PointCloud2Iterator<float> iter_rgb(msg, "rgb");
-
-    // Shared data processing logic
     int32_t* xyz_data = static_cast<int32_t*>(stream->imageList[idx].pAddr);
-
+    
+    // Build PCL cloud for processing
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr input_cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+    input_cloud->points.reserve(points);
+    
     for(uint32_t i = 0; i < points; i++) {
         int32_t* ptr = xyz_data + 7*i;
         
-        *iter_x = static_cast<float>(ptr[0]) / 10000.0f; ++iter_x;
-        *iter_y = static_cast<float>(ptr[1]) / 10000.0f; ++iter_y;
-        *iter_z = static_cast<float>(ptr[2]) / 10000.0f; ++iter_z;
+        pcl::PointXYZRGB point;
+        point.x = static_cast<float>(ptr[0]) / 10000.0f;
+        point.y = static_cast<float>(ptr[1]) / 10000.0f;
+        point.z = static_cast<float>(ptr[2]) / 10000.0f;
+        point.r = ptr[3] & 0xff;
+        point.g = ptr[4] & 0xff;
+        point.b = ptr[5] & 0xff;
         
-        uint8_t r = ptr[3] & 0xff;
-        uint8_t g = ptr[4] & 0xff;
-        uint8_t b = ptr[5] & 0xff;  
-        
-        uint32_t packed_rgb = (static_cast<uint32_t>(r) << 16) | 
-                            (static_cast<uint32_t>(g) << 8)  | 
-                            static_cast<uint32_t>(b);
-        
-        float rgb_float;
-        std::memcpy(&rgb_float, &packed_rgb, sizeof(float));
-        
-        *iter_rgb = rgb_float; ++iter_rgb;
+        input_cloud->points.push_back(point);
     }
+    
+    // If incremental map is enabled, process and publish only novel points
+    if (enable_incremental_map_ && incremental_map_manager_) {
+        pcl::PointCloud<pcl::PointXYZRGB>::Ptr incremental_cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+        size_t novel_points = incremental_map_manager_->processCloud(input_cloud, incremental_cloud);
+        
+        // Publish incremental cloud if it has new points
+        float update_percentage = 100.0f * novel_points / points;
+        if (update_percentage > 0.5 && incremental_cloud_pub_) {
+            sensor_msgs::msg::PointCloud2 incremental_msg;
+            pcl::toROSMsg(*incremental_cloud, incremental_msg);
+            incremental_msg.header.frame_id = "odom";
+            incremental_msg.header.stamp = ns_to_ros_time(stream->imageList[0].timestamp);
+            incremental_cloud_pub_->publish(incremental_msg);
+            
+            RCLCPP_INFO(this->get_logger(), 
+                        "Published %zu incremental points (%.1f%% new)",
+                        novel_points, update_percentage);
+        }
+        
+        // Publish accumulated map periodically (every 50 clouds or if subscribers exist)
+        if (accumulated_map_pub_ && accumulated_map_pub_->get_subscription_count() > 0) {
+            if (++cloud_callback_count_ % 50 == 0) {
+                auto accumulated_map = incremental_map_manager_->getAccumulatedMap();
+                sensor_msgs::msg::PointCloud2 accumulated_msg;
+                pcl::toROSMsg(*accumulated_map, accumulated_msg);
+                accumulated_msg.header.frame_id = "map";
+                accumulated_msg.header.stamp = ns_to_ros_time(stream->imageList[0].timestamp);
+                accumulated_map_pub_->publish(accumulated_msg);
+                
+                incremental_map_manager_->logStatistics();
+            }
+        }
+    } else {
+        // Original behavior: publish all points
+        sensor_msgs::msg::PointCloud2 msg;
+        msg.header.frame_id = "odom";
+        msg.header.stamp = ns_to_ros_time(stream->imageList[0].timestamp);
+        msg.height = 1;
+        msg.width = points;
+        msg.is_dense = false;
 
-    xyzrgbacloud_pub_->publish(std::move(msg));
+        sensor_msgs::PointCloud2Modifier modifier(msg);
+        modifier.setPointCloud2Fields(
+            4,
+            "x", 1, sensor_msgs::msg::PointField::FLOAT32,
+            "y", 1, sensor_msgs::msg::PointField::FLOAT32,
+            "z", 1, sensor_msgs::msg::PointField::FLOAT32,
+            "rgb", 1, sensor_msgs::msg::PointField::FLOAT32
+        );
+        modifier.resize(msg.width * msg.height);
+
+        sensor_msgs::PointCloud2Iterator<float> iter_x(msg, "x");
+        sensor_msgs::PointCloud2Iterator<float> iter_y(msg, "y");
+        sensor_msgs::PointCloud2Iterator<float> iter_z(msg, "z");
+        sensor_msgs::PointCloud2Iterator<float> iter_rgb(msg, "rgb");
+
+        for(const auto& point : input_cloud->points) {
+            *iter_x = point.x; ++iter_x;
+            *iter_y = point.y; ++iter_y;
+            *iter_z = point.z; ++iter_z;
+            
+            uint32_t packed_rgb = (static_cast<uint32_t>(point.r) << 16) | 
+                                (static_cast<uint32_t>(point.g) << 8)  | 
+                                static_cast<uint32_t>(point.b);
+            
+            float rgb_float;
+            std::memcpy(&rgb_float, &packed_rgb, sizeof(float));
+            *iter_rgb = rgb_float; ++iter_rgb;
+        }
+
+        xyzrgbacloud_pub_->publish(std::move(msg));
+    }
 }
 
 void Odin1Driver::syncCallback(const sensor_msgs::msg::Image::ConstSharedPtr& image_msg, const sensor_msgs::msg::PointCloud2::ConstSharedPtr& cloud_msg) {

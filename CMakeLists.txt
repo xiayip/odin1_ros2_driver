@@ -89,7 +89,7 @@ rosidl_get_typesupport_target(cpp_typesupport_target "${PROJECT_NAME}" "rosidl_t
 add_library(odin1_ros2_driver_component SHARED src/odin1_driver.cpp)
 ament_target_dependencies(odin1_ros2_driver_component ${dependencies})
 target_include_directories(odin1_ros2_driver_component PUBLIC ${COMMON_INCLUDE_DIRS})
-target_link_libraries(odin1_ros2_driver_component ${COMMON_LIBRARIES} ${cpp_typesupport_target})
+target_link_libraries(odin1_ros2_driver_component ${COMMON_LIBRARIES} ${PCL_LIBRARIES} ${cpp_typesupport_target})
 rclcpp_components_register_nodes(odin1_ros2_driver_component "odin1_ros2_driver::Odin1Driver")
 
 # Create standalone executable
@@ -98,14 +98,7 @@ ament_target_dependencies(odin1_ros2_driver_node ${dependencies})
 target_include_directories(odin1_ros2_driver_node PUBLIC ${COMMON_INCLUDE_DIRS})
 target_link_libraries(odin1_ros2_driver_node odin1_ros2_driver_component)
 
-# Create incremental map composable node
-add_library(incremental_map_component SHARED src/incremental_map_node.cpp)
-ament_target_dependencies(incremental_map_component ${dependencies})
-target_include_directories(incremental_map_component PUBLIC ${COMMON_INCLUDE_DIRS})
-target_link_libraries(incremental_map_component ${PCL_LIBRARIES})
-rclcpp_components_register_nodes(incremental_map_component "odin1_ros2_driver::IncrementalMapNode")
-
-install(TARGETS odin1_ros2_driver_component odin1_ros2_driver_node incremental_map_component
+install(TARGETS odin1_ros2_driver_component odin1_ros2_driver_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
