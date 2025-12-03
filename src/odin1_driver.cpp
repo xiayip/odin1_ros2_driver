@@ -215,14 +215,6 @@ void Odin1Driver::lidarDeviceCallback(const lidar_device_info_t *device, bool at
             return;
         }
 
-        if (lidar_open_device(odin_device_))
-        {
-            RCLCPP_ERROR(rclcpp::get_logger("device_cb"), "Open device failed");
-            lidar_destory_device(odin_device_);
-            odin_device_ = nullptr;
-            return;
-        }
-
         std::string config_dir = ament_index_cpp::get_package_share_directory("odin1_ros2_driver") + "/config";
         RCLCPP_INFO(rclcpp::get_logger("device_cb"), "Calibration files will be saved to: %s", config_dir.c_str());
         
@@ -230,6 +222,32 @@ void Odin1Driver::lidarDeviceCallback(const lidar_device_info_t *device, bool at
         {
             RCLCPP_ERROR(rclcpp::get_logger("device_cb"), "Get version failed");
             closeDevice();
+            return;
+        }
+
+        switch (device->initial_state) {
+            case LIDAR_DEVICE_NOT_INITIALIZED:
+                RCLCPP_INFO(rclcpp::get_logger("device_cb"), "Device initial state: NOT INITIALIZED, setting mode to SLAM.");
+                break;
+            case LIDAR_DEVICE_INITIALIZED:
+                RCLCPP_INFO(rclcpp::get_logger("device_cb"), "Device initial state: INITIALIZED, setting mode to SLAM.");
+                break;
+            case LIDAR_DEVICE_STREAMING:
+                RCLCPP_INFO(rclcpp::get_logger("device_cb"), "Device initial state: STREAMING, setting mode to SLAM and preparing to start stream.");
+                break;
+            case LIDAR_DEVICE_STREAM_STOPPED:
+                RCLCPP_INFO(rclcpp::get_logger("device_cb"), "Device initial state: STREAM STOPPED, setting mode to SLAM.");
+                break;
+            default:
+                RCLCPP_WARN(rclcpp::get_logger("device_cb"), "Device initial state: UNKNOWN, setting mode to SLAM.");
+                break;
+        }
+
+        if (lidar_open_device(odin_device_))
+        {
+            RCLCPP_ERROR(rclcpp::get_logger("device_cb"), "Open device failed");
+            lidar_destory_device(odin_device_);
+            odin_device_ = nullptr;
             return;
         }
         
@@ -486,38 +504,7 @@ void Odin1Driver::publishRgb(capture_Image_List_t *stream) {
     buffer_List_t &image = stream->imageList[0];
     // old version yuv data
     if (image.length == image.width * image.height * 3 / 2) {
-        const int height_nv12 = image.height * 3 / 2;
-        cv::Mat nv12_mat(height_nv12, image.width, CV_8UC1, image.pAddr);
-        cv::Mat bgr;
-        cv::cvtColor(nv12_mat, bgr, cv::COLOR_YUV2BGR_NV12);
-
-        if (bgr.empty()) {
-            RCLCPP_ERROR(this->get_logger(), "Failed to convert NV12 to BGR");
-            return;
-        }
-
-        //Create ROS image message
-        auto header = std::make_shared<std_msgs::msg::Header>();
-        header->stamp = ns_to_ros_time(image.timestamp); // Offset compensation
-        //RCLCPP_INFO(rclcpp::get_logger("device_cb"), "image rgb %ld",image.timestamp);
-        header->frame_id = "camera_rgb_frame";
-        auto cv_image = std::make_shared<cv_bridge::CvImage>(*header, "bgr8", bgr);
-        auto msg = cv_image->toImageMsg();
-        // Publish original image message
-        rgb_pub_->publish(*msg);
-        
-        // Create compressed image message
-        auto compressed_msg = std::make_shared<sensor_msgs::msg::CompressedImage>();
-        compressed_msg->header = *header;
-        compressed_msg->format = "jpeg";
-        // Set compression parameters
-        std::vector<int> compression_params;
-        compression_params.push_back(cv::IMWRITE_JPEG_QUALITY);
-        compression_params.push_back(80);
-        
-        // Compress image
-        cv::imencode(".JPEG", bgr, compressed_msg->data, compression_params);
-        compressed_rgb_pub_->publish(*compressed_msg);
+        RCLCPP_INFO(rclcpp::get_logger("publishRgb"), "old format rgb data, please upgrade device firmware");
     } else {// new version jpeg data
         std::vector<uint8_t> jpeg_data(static_cast<uint8_t*>(image.pAddr),
                                         static_cast<uint8_t*>(image.pAddr) + image.length);
