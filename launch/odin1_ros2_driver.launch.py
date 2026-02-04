@@ -41,7 +41,6 @@ def generate_launch_description():
         executable="robot_state_publisher",
         output="both",
         parameters=[robot_description],
-        condition=IfCondition(rviz_arg),
     )
     
     # run rviz2 if needed
