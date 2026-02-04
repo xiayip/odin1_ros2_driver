@@ -45,6 +45,16 @@ def generate_launch_description():
         default_value='10.0',
         description='Maximum range for sensor readings'
     )
+    occupancy_min_z_arg = DeclareLaunchArgument(
+        'occupancy_min_z',
+        default_value='0.1',
+        description='Minimum height for occupancy grid projection'
+    )
+    occupancy_max_z_arg = DeclareLaunchArgument(
+        'occupancy_max_z',
+        default_value='1.7',
+        description='Maximum height for occupancy grid projection'
+    )
     
     # OctoMap server node
     octomap_server_node = Node(
@@ -55,9 +65,12 @@ def generate_launch_description():
             'resolution': LaunchConfiguration('resolution'),
             'frame_id': LaunchConfiguration('frame_id'),
             'sensor_model.max_range': LaunchConfiguration('max_range'),
+            'occupancy_min_z': LaunchConfiguration('occupancy_min_z'),
+            'occupancy_max_z': LaunchConfiguration('occupancy_max_z'),
         }],
         remappings=[
             ('cloud_in', LaunchConfiguration('cloud_topic')),
+            ('projected_map', 'map')
         ],
         output='screen',
     )
@@ -68,6 +81,8 @@ def generate_launch_description():
         frame_id_arg,
         cloud_topic_arg,
         max_range_arg,
+        occupancy_min_z_arg,
+        occupancy_max_z_arg,
         # Odin1 driver
         odin1_driver_launch,
         # OctoMap server
