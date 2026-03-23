@@ -202,6 +202,39 @@ Configure via launch arguments:
 - `occupancy_min_z` (double): Minimum height for 2D occupancy grid projection (default: 0.1m)
 - `occupancy_max_z` (double): Maximum height for 2D occupancy grid projection (default: 1.7m)
 
+## Downstream Modules
+
+### PointCloud Compressor
+
+[pointcloud_compressor](git@10.128.110.176:manipulation-group/pointcloud_compressor.git) is a downstream point cloud compression module that uses the Google Draco compression library to efficiently compress and decompress point cloud data from the Odin1 driver, ideal for bandwidth-constrained network transmission scenarios.
+
+**Key Features:**
+- High-efficiency point cloud compression based on Google Draco (compression ratio 3:1 ~ 12:1)
+- Supports both XYZ and XYZRGB point cloud formats
+- Configurable compression level and quantization precision
+- Composable Node variant available for efficient intra-process communication with the Odin1 driver
+- Processing latency 5-50ms, suitable for real-time applications
+
+**Quick Start:**
+```bash
+# Compress Odin1 SLAM point cloud
+ros2 launch pointcloud_compressor pointcloud_compressor.launch.py \
+    input_topic:=/odin1/cloud_slam output_topic:=/compressed_pointcloud
+
+# Decompress point cloud
+ros2 launch pointcloud_compressor pointcloud_decompressor.launch.py \
+    input_topic:=/compressed_pointcloud output_topic:=/decompressed_pointcloud
+```
+
+**Configurable Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `input_topic` | string | `odin1/cloud_slam` | Input point cloud topic |
+| `output_topic` | string | `compressed_pointcloud` | Output compressed data topic |
+| `compression_level` | int | 6 | Compression level (0-10). Higher = better compression, slower processing |
+| `quantization_bits` | int | 16 | Quantization bits (8-16). Lower = higher compression, lower precision |
+
 ## Troubleshooting
 
 ### Common Issues
