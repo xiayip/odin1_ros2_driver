@@ -7,6 +7,7 @@ Modern ROS2 driver for Odin1 LIDAR/camera sensor modules with advanced composabl
 This ROS2 driver provides comprehensive support for Odin1 sensor modules, featuring:
 - **Composable Node Architecture** - Efficient memory usage and flexible deployment
 - **Incremental Point Cloud Mapping** - Real-time novelty detection and map accumulation
+- **OctoMap 3D Occupancy Mapping** - 3D occupancy grid generation with projected 2D map output
 - **RGB-PointCloud Fusion** - Real-time fusion of camera and LIDAR data
 - **Runtime Stream Control** - Service-based control of data streams
 - **Multi-format Support** - Raw and compressed image publishing
@@ -35,6 +36,7 @@ Current Version: v1.1.0
 - **cv_bridge** - ROS2-OpenCV integration
 - **message_filters** - Message synchronization
 - **rclcpp_components** - Composable node support
+- **octomap_server** - OctoMap 3D occupancy mapping server (for OctoMap launch)
 
 ## Installation
 
@@ -84,6 +86,11 @@ ros2 launch odin1_ros2_driver odin1_composable.launch.py rviz:=true
 
 # Launch with incremental point cloud mapping (NEW!)
 ros2 launch odin1_ros2_driver odin1_with_incremental_points.launch.py rviz:=true
+
+# Launch with OctoMap 3D occupancy mapping (NEW!)
+ros2 launch odin1_ros2_driver odin1_with_octomap.launch.py
+# With custom parameters
+ros2 launch odin1_ros2_driver odin1_with_octomap.launch.py resolution:=0.1 max_range:=15.0 cloud_topic:=/odin1/cloud_slam
 ```
 
 ### Runtime Control
@@ -130,7 +137,8 @@ odin1_ros2_driver/
 ├── launch/
 │   ├── odin1_ros2_driver.launch.py           # Standard node launch
 │   ├── odin1_composable.launch.py            # Composable node launch
-│   └── odin1_with_incremental_points.launch.py  # With mapping (NEW)
+│   ├── odin1_with_incremental_points.launch.py  # With mapping (NEW)
+│   └── odin1_with_octomap.launch.py              # With OctoMap 3D mapping (NEW)
 ├── src/
 │   ├── odin1_driver.cpp       # Main driver implementation
 │   ├── odin1_driver_node.cpp  # Node executable
@@ -156,6 +164,9 @@ odin1_ros2_driver/
 | `/odin1/cloud_slam` | `sensor_msgs/msg/PointCloud2` | SLAM-processed point cloud |
 | `/odin1/cloud_incremental` | `sensor_msgs/msg/PointCloud2` | **NEW**: Incremental points (novelty only) |
 | `/odin1/cloud_accumulated` | `sensor_msgs/msg/PointCloud2` | **NEW**: Accumulated map (full history) |
+| `/octomap_full` | `octomap_msgs/msg/Octomap` | **NEW**: Full OctoMap 3D occupancy grid |
+| `/occupied_cells_vis_array` | `visualization_msgs/msg/MarkerArray` | **NEW**: OctoMap occupied cells for RVIZ |
+| `/map` | `nav_msgs/msg/OccupancyGrid` | **NEW**: 2D projected occupancy grid from OctoMap |
 | `/odin1/odometry` | `nav_msgs/msg/Odometry` | SLAM odometry data |
 
 ### Services
@@ -181,6 +192,15 @@ Configure via launch file or command line:
 - `octree_resolution` (double): Octree spatial index resolution (default: 0.02m)  
 - `novelty_threshold` (double): Distance threshold for novelty detection (default: 0.02m)
 - `max_accumulated_points` (int): Max points before auto-downsample (default: 1,000,000)
+
+#### OctoMap Server Parameters **NEW**
+Configure via launch arguments:
+- `resolution` (double): OctoMap voxel resolution in meters (default: 0.05m)
+- `frame_id` (string): Fixed frame for the OctoMap (default: `map`)
+- `cloud_topic` (string): Input point cloud topic (default: `/odin1/cloud_raw`)
+- `max_range` (double): Maximum range for sensor readings in meters (default: 10.0m)
+- `occupancy_min_z` (double): Minimum height for 2D occupancy grid projection (default: 0.1m)
+- `occupancy_max_z` (double): Maximum height for 2D occupancy grid projection (default: 1.7m)
 
 ## Troubleshooting
 
