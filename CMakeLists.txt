@@ -3,6 +3,11 @@ project(odin1_ros2_driver)
 
 set(CMAKE_CXX_STANDARD 17)
 
+# Use legacy FindCUDA module (required by OpenCV's cmake config on cmake 3.28+)
+if(POLICY CMP0146)
+  cmake_policy(SET CMP0146 OLD)
+endif()
+
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
