@@ -12,6 +12,14 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+# Prefer Ubuntu OpenMPI over the CUDA image's HPC-X wrapper for PCL/VTK's FindMPI path.
+if(UNIX AND EXISTS "/usr/bin/mpicc.openmpi" AND NOT DEFINED MPI_C_COMPILER)
+  set(MPI_C_COMPILER "/usr/bin/mpicc.openmpi" CACHE FILEPATH "MPI C compiler wrapper")
+endif()
+if(UNIX AND EXISTS "/usr/bin/mpicxx.openmpi" AND NOT DEFINED MPI_CXX_COMPILER)
+  set(MPI_CXX_COMPILER "/usr/bin/mpicxx.openmpi" CACHE FILEPATH "MPI CXX compiler wrapper")
+endif()
+
 
 # find dependencies
 set(dependencies

@@ -14,7 +14,7 @@ This ROS2 driver provides comprehensive support for Odin1 sensor modules, featur
 - **SLAM Integration** - Odometry and SLAM point cloud support
 - **Intelligent Color Handling** - Automatic RGB/Intensity-based point cloud coloring
 
-**Compatibility:** ROS2 Humble (Ubuntu 22.04)
+**Compatibility:** ROS 2 Humble/Jazzy and other apt-based ROS 2 distributions when matching dependency packages are available. The commands below use `${ROS_DISTRO}` instead of a hard-coded distribution name.
 
 ## Version
 
@@ -23,10 +23,10 @@ Current Version: v1.1.0
 ## Requirements
 
 ### Operating System
-- Ubuntu 22.04 LTS (for ROS2 Humble)
+- Ubuntu version matching your ROS 2 distribution, for example Ubuntu 22.04 for Humble or Ubuntu 24.04 for Jazzy
 
 ### Dependencies
-- **ROS2 Humble** - Core ROS2 framework
+- **ROS 2 `${ROS_DISTRO}`** - Core ROS 2 framework
 - **OpenCV >= 4.5.0** - Computer vision library
 - **PCL (Point Cloud Library)** - Point cloud processing and octree spatial indexing
 - **pcl_conversions** - PCL-ROS2 message conversion
@@ -42,16 +42,24 @@ Current Version: v1.1.0
 
 ### 1. Install System Dependencies
 ```bash
+# If ROS 2 is already sourced, ROS_DISTRO is already set.
+# Otherwise set it explicitly, for example: humble or jazzy.
+export ROS_DISTRO=jazzy
+
 sudo apt update
 sudo apt install -y build-essential cmake git libgtk2.0-dev pkg-config \
     libavcodec-dev libavformat-dev libswscale-dev libyaml-cpp-dev \
     libusb-1.0-0-dev libopencv-dev libeigen3-dev \
-    libpcl-dev ros-humble-pcl-conversions ros-humble-pcl-ros
+    libpcl-dev ros-${ROS_DISTRO}-pcl-conversions ros-${ROS_DISTRO}-pcl-ros
+
+# Optional: required by odin1_with_octomap.launch.py
+sudo apt install -y ros-${ROS_DISTRO}-octomap-server
 ```
 
-### 2. Install ROS2 Humble
-Follow the official ROS2 Humble installation guide:
-[ROS2 Humble Installation](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debians.html)
+### 2. Install ROS 2
+Follow the official installation guide for your target ROS 2 distribution:
+- [ROS 2 Humble](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debians.html)
+- [ROS 2 Jazzy](https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debians.html)
 
 ### 3. Setup USB Device Rules
 ```bash
@@ -67,6 +75,9 @@ sudo udevadm trigger
 ```bash
 # Navigate to your ROS2 workspace
 cd /path/to/your/ros2_workspace
+
+# Source your ROS 2 distribution
+source /opt/ros/${ROS_DISTRO}/setup.bash
 
 # Build the package
 colcon build --packages-select odin1_ros2_driver
