@@ -114,7 +114,7 @@ void Odin1Driver::loadParameters()
     this->declare_parameter("recorddata", 0);
     this->declare_parameter("custom_map_mode", 0);
     this->declare_parameter("sendpath", 1);
-    this->declare_parameter("use_host_ros_time", 1);
+    this->declare_parameter("use_host_ros_time", 0);
     this->declare_parameter("relocalization_map_abs_path", "");
 
     this->get_parameter("streamctrl", streamctrl_);
