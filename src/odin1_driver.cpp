@@ -98,6 +98,7 @@ void Odin1Driver::loadParameters()
     this->declare_parameter("senddepth", 0);
     this->declare_parameter("recorddata", 0);
     this->declare_parameter("custom_map_mode", 0);
+    this->declare_parameter("sendpath", 1);
     this->declare_parameter("relocalization_map_abs_path", "");
 
     this->get_parameter("streamctrl", streamctrl_);
@@ -111,10 +112,11 @@ void Odin1Driver::loadParameters()
     this->get_parameter("senddepth", senddepth_);
     this->get_parameter("recorddata", recorddata_);
     this->get_parameter("custom_map_mode", custom_map_mode_);
+    this->get_parameter("sendpath", sendpath_);
     this->get_parameter("relocalization_map_abs_path", relocalization_map_abs_path_);
 
-    RCLCPP_INFO(this->get_logger(), "Parameters loaded, streamctrl: %d, sendrgb: %d, sendimu: %d, sendodom: %d, senddtof: %d, sendcloudslam: %d, sendcloudrender: %d, sendrgbcompressed: %d, senddepth: %d, recorddata: %d, custom_map_mode: %d",
-                streamctrl_, sendrgb_, sendimu_, sendodom_, senddtof_, sendcloudslam_, sendcloudrender_, sendrgbcompressed_, senddepth_, recorddata_, custom_map_mode_);
+    RCLCPP_INFO(this->get_logger(), "Parameters loaded, streamctrl: %d, sendrgb: %d, sendimu: %d, sendodom: %d, senddtof: %d, sendcloudslam: %d, sendcloudrender: %d, sendrgbcompressed: %d, senddepth: %d, recorddata: %d, custom_map_mode: %d, sendpath: %d",
+                streamctrl_, sendrgb_, sendimu_, sendodom_, senddtof_, sendcloudslam_, sendcloudrender_, sendrgbcompressed_, senddepth_, recorddata_, custom_map_mode_, sendpath_);
 }
 
 void Odin1Driver::setupPublishers()
@@ -125,6 +127,7 @@ void Odin1Driver::setupPublishers()
     xyzrgbacloud_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("odin1/cloud_slam", 10);
     odom_publisher_ = this->create_publisher<nav_msgs::msg::Odometry>("odin1/odometry", 10);
     compressed_rgb_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("odin1/image/compressed", 10);
+    path_pub_ = this->create_publisher<nav_msgs::msg::Path>("odin1/path", 10);
     tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
     RCLCPP_INFO(this->get_logger(), "Publishers setup completed.");
 }
@@ -357,6 +360,9 @@ void Odin1Driver::lidarDataCallback(const lidar_data_t *data, void *user_data) {
     case LIDAR_DT_SLAM_ODOMETRY:
         if (sendodom_) {
             publishBaseToOdomTF((capture_Image_List_t *)&data->stream);
+        }
+        if (sendpath_) {
+            publishPath((capture_Image_List_t *)&data->stream);
         }
         break;
     case LIDAR_DT_DEV_STATUS:
@@ -602,6 +608,51 @@ void Odin1Driver::publishOdometry(capture_Image_List_t *stream) {
     } else {
         RCLCPP_WARN(this->get_logger(), "Unknown odometry data length: %u", data_len);
     }
+}
+
+void Odin1Driver::publishPath(capture_Image_List_t* stream) {
+    uint32_t data_len = stream->imageList[0].length;
+
+    // Extract the current trajectory pose from the odometry data.
+    geometry_msgs::msg::PoseStamped pose;
+    pose.header.frame_id = "odom";
+    if (data_len == sizeof(ros_odom_convert_complete_t)) {
+        ros_odom_convert_complete_t* odom_data = (ros_odom_convert_complete_t*)stream->imageList[0].pAddr;
+        pose.header.stamp = ns_to_ros_time(odom_data->timestamp_ns);
+        pose.pose.position.x = static_cast<double>(odom_data->pos[0]) / 1e6;
+        pose.pose.position.y = static_cast<double>(odom_data->pos[1]) / 1e6;
+        pose.pose.position.z = static_cast<double>(odom_data->pos[2]) / 1e6;
+        pose.pose.orientation.x = static_cast<double>(odom_data->orient[0]) / 1e6;
+        pose.pose.orientation.y = static_cast<double>(odom_data->orient[1]) / 1e6;
+        pose.pose.orientation.z = static_cast<double>(odom_data->orient[2]) / 1e6;
+        pose.pose.orientation.w = static_cast<double>(odom_data->orient[3]) / 1e6;
+    } else if (data_len == sizeof(ros2_odom_convert_t)) {
+        ros2_odom_convert_t* odom_data = (ros2_odom_convert_t*)stream->imageList[0].pAddr;
+        pose.header.stamp = ns_to_ros_time(odom_data->timestamp_ns);
+        pose.pose.position.x = static_cast<double>(odom_data->pos[0]) / 1e6;
+        pose.pose.position.y = static_cast<double>(odom_data->pos[1]) / 1e6;
+        pose.pose.position.z = static_cast<double>(odom_data->pos[2]) / 1e6;
+        pose.pose.orientation.x = static_cast<double>(odom_data->orient[0]) / 1e6;
+        pose.pose.orientation.y = static_cast<double>(odom_data->orient[1]) / 1e6;
+        pose.pose.orientation.z = static_cast<double>(odom_data->orient[2]) / 1e6;
+        pose.pose.orientation.w = static_cast<double>(odom_data->orient[3]) / 1e6;
+    } else {
+        RCLCPP_WARN(this->get_logger(), "Unknown odometry data length: %u", data_len);
+        return;
+    }
+
+    // Accumulate poses, capping history to avoid unbounded growth.
+    path_poses_.push_back(pose);
+    if (path_poses_.size() > 30000) {
+        path_poses_.erase(path_poses_.begin());
+    }
+
+    // Publish the accumulated trajectory.
+    nav_msgs::msg::Path path_msg;
+    path_msg.header.frame_id = "odom";
+    path_msg.header.stamp = pose.header.stamp;
+    path_msg.poses = path_poses_;
+    path_pub_->publish(std::move(path_msg));
 }
 
 void Odin1Driver::publishOdomToMapTF(capture_Image_List_t* stream) {

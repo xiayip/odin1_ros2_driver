@@ -8,6 +8,7 @@ odin1_ros2_driver:
     sendcloudslam: 1
     sendcloudrender: 0
     sendrgbcompressed: 1
+    sendpath: 1
     senddepth: 0
     recorddata: 0
     custom_map_mode: 1    # 0: Odometry mode 1: SLAM mode 2: Relocalization mode

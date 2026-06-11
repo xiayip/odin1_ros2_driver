@@ -22,6 +22,7 @@ limitations under the License.
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
 #include "nav_msgs/msg/odometry.hpp"
+#include "nav_msgs/msg/path.hpp"
 #include "std_srvs/srv/set_bool.hpp"
 #include "tf2_ros/transform_broadcaster.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
@@ -59,6 +60,7 @@ private:
     void publishRgb(capture_Image_List_t* data);
     void publishImu(imu_convert_data_t* stream);
     void publishOdometry(capture_Image_List_t* stream);
+    void publishPath(capture_Image_List_t* stream);
     void publishBaseToOdomTF(capture_Image_List_t* stream);
     void publishOdomToMapTF(capture_Image_List_t* stream);
     void publishIntensityCloud(capture_Image_List_t* stream, int idx);
@@ -78,7 +80,7 @@ private:
     // render
     std::shared_ptr<rawCloudRender> render_;
     // Parameters
-    int streamctrl_, sendrgb_, sendimu_, sendodom_, senddtof_, sendcloudslam_, sendcloudrender_, sendrgbcompressed_, senddepth_, recorddata_, custom_map_mode_;
+    int streamctrl_, sendrgb_, sendimu_, sendodom_, senddtof_, sendcloudslam_, sendcloudrender_, sendrgbcompressed_, senddepth_, recorddata_, custom_map_mode_, sendpath_;
     std::string relocalization_map_abs_path_;
     // Publishers
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
@@ -88,6 +90,9 @@ private:
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_rgb_pub_; // New compressed image publisher
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr rgbcloud_pub_;
+    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
+    // Accumulated trajectory poses for the path
+    std::vector<geometry_msgs::msg::PoseStamped> path_poses_;
     // tf_broadcaster
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     // Subscribers using message filters for synchronization
