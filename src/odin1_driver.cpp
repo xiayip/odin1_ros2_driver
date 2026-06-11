@@ -471,40 +471,10 @@ void Odin1Driver::saveMapCallback(const std::shared_ptr<odin1_ros2_driver::srv::
     if (!odin_device_)
     {
         RCLCPP_ERROR(this->get_logger(), "Device handle is null, cannot save map.");
-        response->result = 255;
+        response->result = srv::SaveMap::Response::RESULT_UNDEFINED_FAILURE;
         return;
     }
-    // start saving map by setting save_map parameter to 1
-    int save_flag_value = 1;
-    int init_saving_res = lidar_set_custom_parameter(odin_device_, "save_map", &save_flag_value, sizeof(int));
-    if (init_saving_res != 0)
-    {
-        RCLCPP_ERROR(this->get_logger(), "Failed to initiate map saving, error code: %d", init_saving_res);
-        response->result = 255;
-        return;
-    }
-    RCLCPP_INFO(this->get_logger(), "Map saving initiated on device.");
-    // wait for device to complete saving: last_save_map_val == 1 && save_map == 0
-    int last_save_map_val = -1;
-    while (true) // timeout can be added if needed
-    {
-        int current_save_map_value = 0;
-        int get_param_res = lidar_get_custom_parameter(odin_device_, "save_map", &current_save_map_value);
-        if (get_param_res != 0)
-        {
-            RCLCPP_ERROR(this->get_logger(), "Failed to get save_map parameter, error code: %d", get_param_res);
-            response->result = 255;
-            return;
-        }
-        if (last_save_map_val == 1 && current_save_map_value == 0)
-        {
-            break; // saving completed
-        }
-        last_save_map_val = current_save_map_value;
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-    RCLCPP_INFO(this->get_logger(), "Map saving completed on device, starting transfer.");
-    // download the saved map
+    // Split the requested path into destination directory + file name.
     std::string map_path = request->name.data;
     size_t last_slash_pos = map_path.find_last_of("/\\");
     std::string folder = ".";
@@ -514,17 +484,40 @@ void Odin1Driver::saveMapCallback(const std::shared_ptr<odin1_ros2_driver::srv::
         folder = map_path.substr(0, last_slash_pos);
         filename = map_path.substr(last_slash_pos + 1);
     }
-    // ensure folder exists
+    // The SDK requires dest_dir to already exist.
     std::filesystem::create_directories(folder);
-    int download_res = lidar_get_mapping_result(odin_device_, folder.c_str(), filename.c_str());
-    if (download_res != 0)
+
+    // lidar_save_map is the one-shot synchronous API: it internally drives
+    // set_custom_parameter("save_map")=1 -> poll until reset -> pull the file,
+    // with a built-in generation timeout (0 = SDK default 120s).
+    int save_res = lidar_save_map(odin_device_, folder.c_str(), filename.c_str(), 0);
+    switch (save_res)
     {
-        RCLCPP_ERROR(this->get_logger(), "Failed to download mapping result, error code: %d", download_res);
-        response->result = 255;
-        return;
+        case 0:
+            RCLCPP_INFO(this->get_logger(), "Map saved successfully to %s/%s", folder.c_str(), filename.c_str());
+            response->result = srv::SaveMap::Response::RESULT_SUCCESS;
+            break;
+        case -1:
+            RCLCPP_ERROR(this->get_logger(), "Save map failed: invalid arguments / SDK not initialized (code %d)", save_res);
+            response->result = srv::SaveMap::Response::RESULT_UNDEFINED_FAILURE;
+            break;
+        case -2:
+            RCLCPP_ERROR(this->get_logger(), "Save map failed: device busy with another file transfer (code %d)", save_res);
+            response->result = srv::SaveMap::Response::RESULT_UNDEFINED_FAILURE;
+            break;
+        case -3:
+            RCLCPP_ERROR(this->get_logger(), "Save map failed: timed out waiting for map generation (code %d)", save_res);
+            response->result = srv::SaveMap::Response::RESULT_UNDEFINED_FAILURE;
+            break;
+        case -4:
+            RCLCPP_ERROR(this->get_logger(), "Save map failed: file transfer stalled or failed (code %d)", save_res);
+            response->result = srv::SaveMap::Response::RESULT_NO_MAP_RECEIEVD;
+            break;
+        default:
+            RCLCPP_ERROR(this->get_logger(), "Save map failed: underlying transfer error (code %d)", save_res);
+            response->result = srv::SaveMap::Response::RESULT_UNDEFINED_FAILURE;
+            break;
     }
-    RCLCPP_INFO(this->get_logger(), "Map saving completed successfully.");
-    response->result = 0;
 }
 
 void Odin1Driver::closeDevice() {
