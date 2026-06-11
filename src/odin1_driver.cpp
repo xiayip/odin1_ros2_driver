@@ -132,8 +132,8 @@ void Odin1Driver::loadParameters()
     this->get_parameter("use_host_ros_time", use_host_ros_time_);
     this->get_parameter("relocalization_map_abs_path", relocalization_map_abs_path_);
 
-    RCLCPP_INFO(this->get_logger(), "Parameters loaded, streamctrl: %d, sendrgb: %d, sendimu: %d, sendodom: %d, senddtof: %d, sendcloudslam: %d, sendcloudrender: %d, sendrgbcompressed: %d, senddepth: %d, recorddata: %d, custom_map_mode: %d, sendpath: %d",
-                streamctrl_, sendrgb_, sendimu_, sendodom_, senddtof_, sendcloudslam_, sendcloudrender_, sendrgbcompressed_, senddepth_, recorddata_, custom_map_mode_, sendpath_);
+    RCLCPP_INFO(this->get_logger(), "Parameters loaded, streamctrl: %d, sendrgb: %d, sendimu: %d, sendodom: %d, senddtof: %d, sendcloudslam: %d, sendcloudrender: %d, sendrgbcompressed: %d, senddepth: %d, recorddata: %d, custom_map_mode: %d, sendpath: %d, use_host_ros_time: %d",
+                streamctrl_, sendrgb_, sendimu_, sendodom_, senddtof_, sendcloudslam_, sendcloudrender_, sendrgbcompressed_, senddepth_, recorddata_, custom_map_mode_, sendpath_, use_host_ros_time_);
 }
 
 void Odin1Driver::setupPublishers()
