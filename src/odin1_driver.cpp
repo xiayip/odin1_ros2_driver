@@ -9,6 +9,7 @@
 
 #include "lidar_api.h"
 #include "odin1_ros2_driver/helper.hpp"
+#include <tf2/LinearMath/Transform.h>
 
 #include <signal.h>
 #include <memory>
@@ -657,35 +658,48 @@ void Odin1Driver::publishPath(capture_Image_List_t* stream) {
 
 void Odin1Driver::publishOdomToMapTF(capture_Image_List_t* stream) {
     uint32_t data_len = stream->imageList[0].length;
-    geometry_msgs::msg::TransformStamped tf_msg;
-    tf_msg.header.frame_id = "map";
-    tf_msg.child_frame_id = "odom";
+
+    // The SDK delivers the relocalization result as the pose of the map origin
+    // expressed in the odom frame (T_odom_map), same convention as the standard
+    // odometry. REP-105 wants map as the parent of odom, so we publish the
+    // inverse: T_map_odom = (T_odom_map)^-1.
+    uint64_t timestamp_ns = 0;
+    const int64_t* pos = nullptr;
+    const int64_t* orient = nullptr;
 
     if (data_len == sizeof(ros_odom_convert_complete_t)) {
         ros_odom_convert_complete_t* odom_data = (ros_odom_convert_complete_t*)stream->imageList[0].pAddr;
-        tf_msg.header.stamp = ns_to_ros_time(odom_data->timestamp_ns);
-        tf_msg.transform.translation.x = static_cast<double>(odom_data->pos[0]) / 1e6;
-        tf_msg.transform.translation.y = static_cast<double>(odom_data->pos[1]) / 1e6;
-        tf_msg.transform.translation.z = static_cast<double>(odom_data->pos[2]) / 1e6;
-        tf_msg.transform.rotation.x = static_cast<double>(odom_data->orient[0]) / 1e6;
-        tf_msg.transform.rotation.y = static_cast<double>(odom_data->orient[1]) / 1e6;
-        tf_msg.transform.rotation.z = static_cast<double>(odom_data->orient[2]) / 1e6;
-        tf_msg.transform.rotation.w = static_cast<double>(odom_data->orient[3]) / 1e6;
-        tf_broadcaster_->sendTransform(tf_msg);
+        timestamp_ns = odom_data->timestamp_ns;
+        pos = odom_data->pos;
+        orient = odom_data->orient;
     } else if (data_len == sizeof(ros2_odom_convert_t)) {
         ros2_odom_convert_t* odom_data = (ros2_odom_convert_t*)stream->imageList[0].pAddr;
-        tf_msg.header.stamp = ns_to_ros_time(odom_data->timestamp_ns);
-        tf_msg.transform.translation.x = static_cast<double>(odom_data->pos[0]) / 1e6;
-        tf_msg.transform.translation.y = static_cast<double>(odom_data->pos[1]) / 1e6;
-        tf_msg.transform.translation.z = static_cast<double>(odom_data->pos[2]) / 1e6;
-        tf_msg.transform.rotation.x = static_cast<double>(odom_data->orient[0]) / 1e6;
-        tf_msg.transform.rotation.y = static_cast<double>(odom_data->orient[1]) / 1e6;
-        tf_msg.transform.rotation.z = static_cast<double>(odom_data->orient[2]) / 1e6;
-        tf_msg.transform.rotation.w = static_cast<double>(odom_data->orient[3]) / 1e6;
-        tf_broadcaster_->sendTransform(tf_msg);
+        timestamp_ns = odom_data->timestamp_ns;
+        pos = odom_data->pos;
+        orient = odom_data->orient;
     } else {
         RCLCPP_WARN(this->get_logger(), "Unknown odometry data length: %u", data_len);
+        return;
     }
+
+    // Build T_odom_map from the raw payload, then invert to T_map_odom.
+    tf2::Transform t_odom_map;
+    t_odom_map.setOrigin(tf2::Vector3(
+        static_cast<double>(pos[0]) / 1e6,
+        static_cast<double>(pos[1]) / 1e6,
+        static_cast<double>(pos[2]) / 1e6));
+    t_odom_map.setRotation(tf2::Quaternion(
+        static_cast<double>(orient[0]) / 1e6,
+        static_cast<double>(orient[1]) / 1e6,
+        static_cast<double>(orient[2]) / 1e6,
+        static_cast<double>(orient[3]) / 1e6));
+
+    geometry_msgs::msg::TransformStamped tf_msg;
+    tf_msg.header.stamp = ns_to_ros_time(timestamp_ns);
+    tf_msg.header.frame_id = "map";
+    tf_msg.child_frame_id = "odom";
+    tf_msg.transform = tf2::toMsg(t_odom_map.inverse());
+    tf_broadcaster_->sendTransform(tf_msg);
 }
 
 void Odin1Driver::publishBaseToOdomTF(capture_Image_List_t* stream) {
