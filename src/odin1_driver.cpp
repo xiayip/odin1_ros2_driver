@@ -109,6 +109,7 @@ void Odin1Driver::loadParameters()
     this->declare_parameter("recorddata", 0);
     this->declare_parameter("custom_map_mode", 0);
     this->declare_parameter("sendpath", 1);
+    this->declare_parameter("use_host_ros_time", 1);
     this->declare_parameter("relocalization_map_abs_path", "");
 
     this->get_parameter("streamctrl", streamctrl_);
@@ -123,6 +124,7 @@ void Odin1Driver::loadParameters()
     this->get_parameter("recorddata", recorddata_);
     this->get_parameter("custom_map_mode", custom_map_mode_);
     this->get_parameter("sendpath", sendpath_);
+    this->get_parameter("use_host_ros_time", use_host_ros_time_);
     this->get_parameter("relocalization_map_abs_path", relocalization_map_abs_path_);
 
     RCLCPP_INFO(this->get_logger(), "Parameters loaded, streamctrl: %d, sendrgb: %d, sendimu: %d, sendodom: %d, senddtof: %d, sendcloudslam: %d, sendcloudrender: %d, sendrgbcompressed: %d, senddepth: %d, recorddata: %d, custom_map_mode: %d, sendpath: %d",
@@ -389,6 +391,14 @@ void Odin1Driver::lidarDataCallback(const lidar_data_t *data, void *user_data) {
             publishOdomToMapTF((capture_Image_List_t *)&data->stream);
         }
         break;
+    case LIDAR_DT_NTP:
+    {
+        uint32_t data_len = data->stream.imageList[0].length;
+        if (data_len == sizeof(ptp_sync_data_t)) {
+            updatePtpSync((ptp_sync_data_t *)data->stream.imageList[0].pAddr);
+        }
+        break;
+    }
     default:
         break;
     }
@@ -538,14 +548,14 @@ void Odin1Driver::publishRgb(capture_Image_List_t *stream) {
         cv::Mat decoded_image = cv::imdecode(jpeg_data, cv::IMREAD_COLOR);
 
         auto header = std::make_shared<std_msgs::msg::Header>();
-        header->stamp = ns_to_ros_time(image.timestamp); // Offset compensation
+        header->stamp = makeAlignedStamp(image.timestamp); // Offset compensation
         header->frame_id = "camera_rgb_frame";
         auto cv_image = std::make_shared<cv_bridge::CvImage>(*header, "bgr8", decoded_image);
         rgb_pub_->publish(*(cv_image->toImageMsg()));
 
         // original jpeg
         sensor_msgs::msg::CompressedImage jpeg_msg;
-        jpeg_msg.header.stamp = ns_to_ros_time(stream->imageList[0].timestamp);
+        jpeg_msg.header.stamp = makeAlignedStamp(stream->imageList[0].timestamp);
         jpeg_msg.format = "jpeg";
         jpeg_msg.data = jpeg_data;
         compressed_rgb_pub_->publish(jpeg_msg);
@@ -555,7 +565,7 @@ void Odin1Driver::publishRgb(capture_Image_List_t *stream) {
 void Odin1Driver::publishImu(imu_convert_data_t *stream) {
     sensor_msgs::msg::Imu imu_msg;
     
-    imu_msg.header.stamp = ns_to_ros_time(stream->stamp);
+    imu_msg.header.stamp = makeAlignedStamp(stream->stamp);
     imu_msg.header.frame_id = "imu_link";
     
     imu_msg.linear_acceleration.y = -1 * stream->accel_x;
@@ -574,6 +584,52 @@ void Odin1Driver::publishImu(imu_convert_data_t *stream) {
     imu_pub_->publish(std::move(imu_msg));
 }
 
+rclcpp::Time Odin1Driver::makeAlignedStamp(uint64_t sensor_timestamp_ns) {
+    // Mode 1: stamp with host wall-clock (ROS time) at receipt.
+    if (use_host_ros_time_ == 1) {
+        return this->now();
+    }
+
+    uint64_t ts_ns = sensor_timestamp_ns;
+    // Mode 2: keep the device timestamp but subtract the smoothed PTP offset
+    // so device-side stamps are aligned onto the host clock domain.
+    if (use_host_ros_time_ == 2) {
+        const double offset_s = ptp_offset_smooth_.load(std::memory_order_relaxed);
+        const int64_t offset_ns = static_cast<int64_t>(offset_s * 1e9);
+        const int64_t base_ns = static_cast<int64_t>(sensor_timestamp_ns);
+        const int64_t aligned_ns = base_ns - offset_ns;
+        ts_ns = (aligned_ns < 0) ? 0ULL : static_cast<uint64_t>(aligned_ns);
+    }
+
+    // Mode 0 (default): raw device timestamp, no correction.
+    return ns_to_ros_time(ts_ns);
+}
+
+void Odin1Driver::updatePtpSync(const ptp_sync_data_t* ptp_data) {
+    std::lock_guard<std::mutex> lock(ptp_mutex_);
+    ptp_delay_buf_.push_back(ptp_data->delay);
+    ptp_offset_buf_.push_back(ptp_data->offset);
+
+    if (ptp_delay_buf_.size() > PTP_SMOOTH_WINDOW_SIZE) {
+        ptp_delay_buf_.pop_front();
+    }
+    if (ptp_offset_buf_.size() > PTP_SMOOTH_WINDOW_SIZE) {
+        ptp_offset_buf_.pop_front();
+    }
+
+    double delay_sum = 0.0;
+    for (double v : ptp_delay_buf_) delay_sum += v;
+    double offset_sum = 0.0;
+    for (double v : ptp_offset_buf_) offset_sum += v;
+
+    if (!ptp_delay_buf_.empty()) {
+        ptp_delay_smooth_.store(delay_sum / static_cast<double>(ptp_delay_buf_.size()), std::memory_order_relaxed);
+    }
+    if (!ptp_offset_buf_.empty()) {
+        ptp_offset_smooth_.store(offset_sum / static_cast<double>(ptp_offset_buf_.size()), std::memory_order_relaxed);
+    }
+}
+
 void Odin1Driver::publishOdometry(capture_Image_List_t *stream) {
     uint32_t data_len = stream->imageList[0].length;
     auto msg = nav_msgs::msg::Odometry();
@@ -583,7 +639,7 @@ void Odin1Driver::publishOdometry(capture_Image_List_t *stream) {
     if (data_len == sizeof(ros_odom_convert_complete_t)) {
         ros_odom_convert_complete_t* odom_data = (ros_odom_convert_complete_t*)stream->imageList[0].pAddr;
 
-        msg.header.stamp = ns_to_ros_time(odom_data->timestamp_ns);
+        msg.header.stamp = makeAlignedStamp(odom_data->timestamp_ns);
         msg.pose.pose.position.x = static_cast<double>(odom_data->pos[0]) / 1e6;
         msg.pose.pose.position.y = static_cast<double>(odom_data->pos[1]) / 1e6;
         msg.pose.pose.position.z = static_cast<double>(odom_data->pos[2]) / 1e6;
@@ -607,7 +663,7 @@ void Odin1Driver::publishOdometry(capture_Image_List_t *stream) {
     } else if (data_len == sizeof(ros2_odom_convert_t)) {
         ros2_odom_convert_t* odom_data = (ros2_odom_convert_t*)stream->imageList[0].pAddr;
 
-        msg.header.stamp = ns_to_ros_time(odom_data->timestamp_ns);
+        msg.header.stamp = makeAlignedStamp(odom_data->timestamp_ns);
         msg.pose.pose.position.x = static_cast<double>(odom_data->pos[0]) / 1e6;
         msg.pose.pose.position.y = static_cast<double>(odom_data->pos[1]) / 1e6;
         msg.pose.pose.position.z = static_cast<double>(odom_data->pos[2]) / 1e6;
@@ -629,7 +685,7 @@ void Odin1Driver::publishPath(capture_Image_List_t* stream) {
     pose.header.frame_id = "odom";
     if (data_len == sizeof(ros_odom_convert_complete_t)) {
         ros_odom_convert_complete_t* odom_data = (ros_odom_convert_complete_t*)stream->imageList[0].pAddr;
-        pose.header.stamp = ns_to_ros_time(odom_data->timestamp_ns);
+        pose.header.stamp = makeAlignedStamp(odom_data->timestamp_ns);
         pose.pose.position.x = static_cast<double>(odom_data->pos[0]) / 1e6;
         pose.pose.position.y = static_cast<double>(odom_data->pos[1]) / 1e6;
         pose.pose.position.z = static_cast<double>(odom_data->pos[2]) / 1e6;
@@ -639,7 +695,7 @@ void Odin1Driver::publishPath(capture_Image_List_t* stream) {
         pose.pose.orientation.w = static_cast<double>(odom_data->orient[3]) / 1e6;
     } else if (data_len == sizeof(ros2_odom_convert_t)) {
         ros2_odom_convert_t* odom_data = (ros2_odom_convert_t*)stream->imageList[0].pAddr;
-        pose.header.stamp = ns_to_ros_time(odom_data->timestamp_ns);
+        pose.header.stamp = makeAlignedStamp(odom_data->timestamp_ns);
         pose.pose.position.x = static_cast<double>(odom_data->pos[0]) / 1e6;
         pose.pose.position.y = static_cast<double>(odom_data->pos[1]) / 1e6;
         pose.pose.position.z = static_cast<double>(odom_data->pos[2]) / 1e6;
@@ -705,7 +761,7 @@ void Odin1Driver::publishOdomToMapTF(capture_Image_List_t* stream) {
         static_cast<double>(orient[3]) / 1e6));
 
     geometry_msgs::msg::TransformStamped tf_msg;
-    tf_msg.header.stamp = ns_to_ros_time(timestamp_ns);
+    tf_msg.header.stamp = makeAlignedStamp(timestamp_ns);
     tf_msg.header.frame_id = "map";
     tf_msg.child_frame_id = "odom";
     tf_msg.transform = tf2::toMsg(t_odom_map.inverse());
@@ -737,7 +793,7 @@ void Odin1Driver::publishBaseToOdomTF(capture_Image_List_t* stream) {
 
     if (data_len == sizeof(ros_odom_convert_complete_t)) {
         ros_odom_convert_complete_t* odom_data = (ros_odom_convert_complete_t*)stream->imageList[0].pAddr;
-        tf_msg.header.stamp = ns_to_ros_time(odom_data->timestamp_ns);
+        tf_msg.header.stamp = makeAlignedStamp(odom_data->timestamp_ns);
         tf_msg.transform.translation.x = static_cast<double>(odom_data->pos[0]) / 1e6;
         tf_msg.transform.translation.y = static_cast<double>(odom_data->pos[1]) / 1e6;
         tf_msg.transform.translation.z = static_cast<double>(odom_data->pos[2]) / 1e6;
@@ -748,7 +804,7 @@ void Odin1Driver::publishBaseToOdomTF(capture_Image_List_t* stream) {
         tf_broadcaster_->sendTransform(tf_msg);
     } else if (data_len == sizeof(ros2_odom_convert_t)) {
         ros2_odom_convert_t* odom_data = (ros2_odom_convert_t*)stream->imageList[0].pAddr;
-        tf_msg.header.stamp = ns_to_ros_time(odom_data->timestamp_ns);
+        tf_msg.header.stamp = makeAlignedStamp(odom_data->timestamp_ns);
         tf_msg.transform.translation.x = static_cast<double>(odom_data->pos[0]) / 1e6;
         tf_msg.transform.translation.y = static_cast<double>(odom_data->pos[1]) / 1e6;
         tf_msg.transform.translation.z = static_cast<double>(odom_data->pos[2]) / 1e6;
@@ -786,7 +842,7 @@ void Odin1Driver::publishIntensityCloud(capture_Image_List_t* stream, int idx) {
 
     // Set message header
     msg->header.frame_id = "odin1_base_link";
-    msg->header.stamp = ns_to_ros_time(cloud.timestamp);
+    msg->header.stamp = makeAlignedStamp(cloud.timestamp);
 
     msg->height = cloud.height;
     msg->width = cloud.width;
@@ -881,7 +937,7 @@ void Odin1Driver::publishPC2XYZRGBA(capture_Image_List_t * stream, int idx) {
 
     sensor_msgs::msg::PointCloud2 msg;
     msg.header.frame_id = "odom";
-    msg.header.stamp = ns_to_ros_time(stream->imageList[0].timestamp);
+    msg.header.stamp = makeAlignedStamp(stream->imageList[0].timestamp);
 
     //RCLCPP_INFO(rclcpp::get_logger("device_cb"), "Point cloudrgba %ld",stream->imageList[0].timestamp);
 

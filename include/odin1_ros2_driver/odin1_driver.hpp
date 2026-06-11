@@ -12,6 +12,10 @@ limitations under the License.
 */
 #pragma once
 
+#include <deque>
+#include <mutex>
+#include <atomic>
+
 #include "rclcpp/rclcpp.hpp"
 #include "message_filters/subscriber.hpp"
 #include "message_filters/synchronizer.hpp"
@@ -65,6 +69,9 @@ private:
     void publishBaseToOdomTF(capture_Image_List_t* stream);
     void publishOdomToMapTF(capture_Image_List_t* stream);
     void publishStaticMapToOdomTF();
+    // timestamp alignment (ported from official driver: device ts / host ros time / PTP-corrected)
+    rclcpp::Time makeAlignedStamp(uint64_t sensor_timestamp_ns);
+    void updatePtpSync(const ptp_sync_data_t* ptp_data);
     void publishIntensityCloud(capture_Image_List_t* stream, int idx);
     void publishPC2XYZRGBA(capture_Image_List_t* stream, int idx);
     // fuse rgb and pointcloud
@@ -83,7 +90,16 @@ private:
     std::shared_ptr<rawCloudRender> render_;
     // Parameters
     int streamctrl_, sendrgb_, sendimu_, sendodom_, senddtof_, sendcloudslam_, sendcloudrender_, sendrgbcompressed_, senddepth_, recorddata_, custom_map_mode_, sendpath_;
+    // Timestamp source: 0 = device timestamp, 1 = host ROS time, 2 = device timestamp with smoothed PTP offset
+    int use_host_ros_time_;
     std::string relocalization_map_abs_path_;
+    // PTP/NTP time-sync smoothing state (updated from LIDAR_DT_NTP stream)
+    static constexpr size_t PTP_SMOOTH_WINDOW_SIZE = 300;
+    std::mutex ptp_mutex_;
+    std::deque<double> ptp_delay_buf_;
+    std::deque<double> ptp_offset_buf_;
+    std::atomic<double> ptp_delay_smooth_{0.0};
+    std::atomic<double> ptp_offset_smooth_{0.0};
     // Publishers
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr rgb_pub_;

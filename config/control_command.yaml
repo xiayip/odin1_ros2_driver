@@ -12,4 +12,5 @@ odin1_ros2_driver:
     senddepth: 0
     recorddata: 0
     custom_map_mode: 1    # 0: Odometry mode 1: SLAM mode 2: Relocalization mode
+    use_host_ros_time: 1  # 0: device timestamp, 1: host ROS time, 2: device timestamp with smoothed PTP offset correction
     relocalization_map_abs_path: "/path/to/relocalization/map.bin" # must be set for Relocalization mode or will fail
