@@ -70,6 +70,15 @@ bool Odin1Driver::init()
     setupServices();
     setupSDKCallbacks();
     setupMessageFilters();
+    // In Odometry (0) and SLAM/mapping (1) modes the device never emits a
+    // map<->odom correction (that only comes from LIDAR_DT_SLAM_ODOMETRY_TF in
+    // relocalization mode 2), so map and odom share the same origin. Publish a
+    // static identity map->odom so the TF tree stays connected for map-frame
+    // consumers (octomap, incremental map). In relocalization mode, the dynamic
+    // publishOdomToMapTF provides this edge instead.
+    if (custom_map_mode_ != 2) {
+        publishStaticMapToOdomTF();
+    }
     RCLCPP_INFO(this->get_logger(), "Publishers initialized.");
     return true;
 }
@@ -130,6 +139,7 @@ void Odin1Driver::setupPublishers()
     compressed_rgb_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("odin1/image/compressed", 10);
     path_pub_ = this->create_publisher<nav_msgs::msg::Path>("odin1/path", 10);
     tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
+    static_tf_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
     RCLCPP_INFO(this->get_logger(), "Publishers setup completed.");
 }
 
@@ -700,6 +710,23 @@ void Odin1Driver::publishOdomToMapTF(capture_Image_List_t* stream) {
     tf_msg.child_frame_id = "odom";
     tf_msg.transform = tf2::toMsg(t_odom_map.inverse());
     tf_broadcaster_->sendTransform(tf_msg);
+}
+
+void Odin1Driver::publishStaticMapToOdomTF() {
+    geometry_msgs::msg::TransformStamped tf_msg;
+    tf_msg.header.stamp = this->now();
+    tf_msg.header.frame_id = "map";
+    tf_msg.child_frame_id = "odom";
+    tf_msg.transform.translation.x = 0.0;
+    tf_msg.transform.translation.y = 0.0;
+    tf_msg.transform.translation.z = 0.0;
+    tf_msg.transform.rotation.x = 0.0;
+    tf_msg.transform.rotation.y = 0.0;
+    tf_msg.transform.rotation.z = 0.0;
+    tf_msg.transform.rotation.w = 1.0;
+    static_tf_broadcaster_->sendTransform(tf_msg);
+    RCLCPP_INFO(this->get_logger(),
+                "Published static identity map->odom TF (custom_map_mode=%d)", custom_map_mode_);
 }
 
 void Odin1Driver::publishBaseToOdomTF(capture_Image_List_t* stream) {

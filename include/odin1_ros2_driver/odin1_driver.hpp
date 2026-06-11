@@ -25,6 +25,7 @@ limitations under the License.
 #include "nav_msgs/msg/path.hpp"
 #include "std_srvs/srv/set_bool.hpp"
 #include "tf2_ros/transform_broadcaster.h"
+#include "tf2_ros/static_transform_broadcaster.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
 #include "lidar_api_type.h"
@@ -63,6 +64,7 @@ private:
     void publishPath(capture_Image_List_t* stream);
     void publishBaseToOdomTF(capture_Image_List_t* stream);
     void publishOdomToMapTF(capture_Image_List_t* stream);
+    void publishStaticMapToOdomTF();
     void publishIntensityCloud(capture_Image_List_t* stream, int idx);
     void publishPC2XYZRGBA(capture_Image_List_t* stream, int idx);
     // fuse rgb and pointcloud
@@ -95,6 +97,7 @@ private:
     std::vector<geometry_msgs::msg::PoseStamped> path_poses_;
     // tf_broadcaster
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+    std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
     // Subscribers using message filters for synchronization
     std::shared_ptr<message_filters::Subscriber<sensor_msgs::msg::Image>> image_sub_;
     std::shared_ptr<message_filters::Subscriber<sensor_msgs::msg::PointCloud2>> cloud_sub_;
