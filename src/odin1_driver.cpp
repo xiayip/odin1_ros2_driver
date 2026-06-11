@@ -5,7 +5,12 @@
 #include <sensor_msgs/msg/point_field.hpp>
 
 #include <opencv2/opencv.hpp>
+// cv_bridge 3.3+ ships cv_bridge.hpp; Humble's 3.2.x only has cv_bridge.h.
+#if __has_include(<cv_bridge/cv_bridge.hpp>)
 #include <cv_bridge/cv_bridge.hpp>
+#else
+#include <cv_bridge/cv_bridge.h>
+#endif
 
 #include "lidar_api.h"
 #include "odin1_ros2_driver/helper.hpp"
