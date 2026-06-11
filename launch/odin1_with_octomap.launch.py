@@ -31,9 +31,19 @@ def generate_launch_description():
         description='Resolution of the OctoMap in meters'
     )
     frame_id_arg = DeclareLaunchArgument(
-        'frame_id', 
+        'frame_id',
         default_value='map',
         description='The fixed frame for the OctoMap'
+    )
+    base_frame_id_arg = DeclareLaunchArgument(
+        'base_frame_id',
+        default_value='odin1_base_link',
+        description='Robot base frame used by octomap (must exist in the TF tree)'
+    )
+    queue_size_arg = DeclareLaunchArgument(
+        'message_filter_queue_size',
+        default_value='20',
+        description='TF message filter queue size for incoming clouds'
     )
     cloud_topic_arg = DeclareLaunchArgument(
         'cloud_topic', 
@@ -41,9 +51,9 @@ def generate_launch_description():
         description='Input point cloud topic'
     )
     max_range_arg = DeclareLaunchArgument(
-        'max_range', 
-        default_value='10.0',
-        description='Maximum range for sensor readings'
+        'max_range',
+        default_value='5.0',
+        description='Maximum range for sensor readings (smaller = faster raycasting)'
     )
     occupancy_min_z_arg = DeclareLaunchArgument(
         'occupancy_min_z',
@@ -64,9 +74,11 @@ def generate_launch_description():
         parameters=[{
             'resolution': LaunchConfiguration('resolution'),
             'frame_id': LaunchConfiguration('frame_id'),
+            'base_frame_id': LaunchConfiguration('base_frame_id'),
             'sensor_model.max_range': LaunchConfiguration('max_range'),
             'occupancy_min_z': LaunchConfiguration('occupancy_min_z'),
             'occupancy_max_z': LaunchConfiguration('occupancy_max_z'),
+            'message_filter_queue_size': LaunchConfiguration('message_filter_queue_size'),
         }],
         remappings=[
             ('cloud_in', LaunchConfiguration('cloud_topic')),
@@ -79,6 +91,8 @@ def generate_launch_description():
         # Launch arguments
         resolution_arg,
         frame_id_arg,
+        base_frame_id_arg,
+        queue_size_arg,
         cloud_topic_arg,
         max_range_arg,
         occupancy_min_z_arg,
