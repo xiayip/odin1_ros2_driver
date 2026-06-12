@@ -14,3 +14,10 @@ odin1_ros2_driver:
     custom_map_mode: 1    # 0: Odometry mode 1: SLAM mode 2: Relocalization mode
     use_host_ros_time: 0  # 0: device timestamp, 1: host ROS time, 2: device timestamp with smoothed PTP offset correction
     relocalization_map_abs_path: "/path/to/relocalization/map.bin" # must be set for Relocalization mode or will fail
+    # When set (e.g. "base_footprint"), the driver looks up the mounting
+    # extrinsic tf_base_frame -> sensor_frame from the robot's TF tree and
+    # publishes odom -> tf_base_frame instead of odom -> sensor_frame, keeping
+    # the URDF tree as the single parent of the sensor frame.
+    # Leave empty to publish odom -> sensor_frame directly (standalone use).
+    tf_base_frame: ""
+    sensor_frame: "odin1_base_link"

@@ -116,6 +116,11 @@ void Odin1Driver::loadParameters()
     this->declare_parameter("sendpath", 1);
     this->declare_parameter("use_host_ros_time", 0);
     this->declare_parameter("relocalization_map_abs_path", "");
+    // When set (e.g. "base_footprint"), publish odom -> tf_base_frame using the
+    // URDF mounting extrinsic instead of odom -> sensor_frame, so the sensor
+    // frame keeps its single URDF parent.
+    this->declare_parameter("tf_base_frame", "");
+    this->declare_parameter("sensor_frame", "odin1_base_link");
 
     this->get_parameter("streamctrl", streamctrl_);
     this->get_parameter("sendrgb", sendrgb_);
@@ -131,6 +136,8 @@ void Odin1Driver::loadParameters()
     this->get_parameter("sendpath", sendpath_);
     this->get_parameter("use_host_ros_time", use_host_ros_time_);
     this->get_parameter("relocalization_map_abs_path", relocalization_map_abs_path_);
+    this->get_parameter("tf_base_frame", tf_base_frame_);
+    this->get_parameter("sensor_frame", sensor_frame_);
 
     RCLCPP_INFO(this->get_logger(), "Parameters loaded, streamctrl: %d, sendrgb: %d, sendimu: %d, sendodom: %d, senddtof: %d, sendcloudslam: %d, sendcloudrender: %d, sendrgbcompressed: %d, senddepth: %d, recorddata: %d, custom_map_mode: %d, sendpath: %d, use_host_ros_time: %d",
                 streamctrl_, sendrgb_, sendimu_, sendodom_, senddtof_, sendcloudslam_, sendcloudrender_, sendrgbcompressed_, senddepth_, recorddata_, custom_map_mode_, sendpath_, use_host_ros_time_);
@@ -147,6 +154,13 @@ void Odin1Driver::setupPublishers()
     path_pub_ = this->create_publisher<nav_msgs::msg::Path>("odin1/path", 10);
     tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
     static_tf_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
+    if (!tf_base_frame_.empty()) {
+        tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
+        tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_, this);
+        RCLCPP_INFO(this->get_logger(),
+                    "TF compensation enabled: publishing odom -> %s using extrinsic %s -> %s from TF",
+                    tf_base_frame_.c_str(), tf_base_frame_.c_str(), sensor_frame_.c_str());
+    }
     RCLCPP_INFO(this->get_logger(), "Publishers setup completed.");
 }
 
@@ -657,7 +671,6 @@ void Odin1Driver::publishOdometry(capture_Image_List_t *stream) {
         for (int i = 0; i < 36; ++i) {
             msg.twist.covariance[i] = odom_data->twist_cov[i];
         }
-        odom_publisher_->publish(std::move(msg));
     } else if (data_len == sizeof(ros2_odom_convert_t)) {
         ros2_odom_convert_t* odom_data = (ros2_odom_convert_t*)stream->imageList[0].pAddr;
 
@@ -669,10 +682,36 @@ void Odin1Driver::publishOdometry(capture_Image_List_t *stream) {
         msg.pose.pose.orientation.y = static_cast<double>(odom_data->orient[1]) / 1e6;
         msg.pose.pose.orientation.z = static_cast<double>(odom_data->orient[2]) / 1e6;
         msg.pose.pose.orientation.w = static_cast<double>(odom_data->orient[3]) / 1e6;
-        odom_publisher_->publish(std::move(msg));
     } else {
         RCLCPP_WARN(this->get_logger(), "Unknown odometry data length: %u", data_len);
+        return;
     }
+
+    if (!tf_base_frame_.empty() && lookupBaseToSensor()) {
+        // Report the base frame pose instead of the raw sensor pose:
+        // T_odom_base = T_odom_sensor * (T_base_sensor)^-1.
+        tf2::Transform t_odom_sensor;
+        tf2::fromMsg(msg.pose.pose, t_odom_sensor);
+        tf2::Transform t_odom_base = t_odom_sensor * base_to_sensor_.inverse();
+        tf2::toMsg(t_odom_base, msg.pose.pose);
+
+        // Re-express the body-frame twist in the base frame (rotation only;
+        // the lever-arm contribution to linear velocity is neglected).
+        const tf2::Matrix3x3 r_base_sensor(base_to_sensor_.getRotation());
+        tf2::Vector3 lin(msg.twist.twist.linear.x, msg.twist.twist.linear.y, msg.twist.twist.linear.z);
+        tf2::Vector3 ang(msg.twist.twist.angular.x, msg.twist.twist.angular.y, msg.twist.twist.angular.z);
+        lin = r_base_sensor * lin;
+        ang = r_base_sensor * ang;
+        msg.twist.twist.linear.x = lin.x();
+        msg.twist.twist.linear.y = lin.y();
+        msg.twist.twist.linear.z = lin.z();
+        msg.twist.twist.angular.x = ang.x();
+        msg.twist.twist.angular.y = ang.y();
+        msg.twist.twist.angular.z = ang.z();
+        msg.child_frame_id = tf_base_frame_;
+    }
+
+    odom_publisher_->publish(std::move(msg));
 }
 
 void Odin1Driver::publishPath(capture_Image_List_t* stream) {
@@ -783,37 +822,77 @@ void Odin1Driver::publishStaticMapToOdomTF() {
                 "Published static identity map->odom TF (custom_map_mode=%d)", custom_map_mode_);
 }
 
+bool Odin1Driver::lookupBaseToSensor() {
+    if (have_base_to_sensor_) {
+        return true;
+    }
+    if (!tf_buffer_) {
+        return false;
+    }
+    try {
+        // The mounting chain (URDF fixed joints) is time-invariant; latest is fine.
+        auto tf_msg = tf_buffer_->lookupTransform(tf_base_frame_, sensor_frame_, tf2::TimePointZero);
+        tf2::fromMsg(tf_msg.transform, base_to_sensor_);
+        have_base_to_sensor_ = true;
+        RCLCPP_INFO(this->get_logger(), "Cached mounting extrinsic %s -> %s from TF",
+                    tf_base_frame_.c_str(), sensor_frame_.c_str());
+        return true;
+    } catch (const tf2::TransformException &ex) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                             "Waiting for extrinsic %s -> %s: %s",
+                             tf_base_frame_.c_str(), sensor_frame_.c_str(), ex.what());
+        return false;
+    }
+}
+
 void Odin1Driver::publishBaseToOdomTF(capture_Image_List_t* stream) {
     uint32_t data_len = stream->imageList[0].length;
-    geometry_msgs::msg::TransformStamped tf_msg;
-    tf_msg.header.frame_id = "odom";
-    tf_msg.child_frame_id = "odin1_base_link";
 
+    uint64_t timestamp_ns = 0;
+    const int64_t* pos = nullptr;
+    const int64_t* orient = nullptr;
     if (data_len == sizeof(ros_odom_convert_complete_t)) {
         ros_odom_convert_complete_t* odom_data = (ros_odom_convert_complete_t*)stream->imageList[0].pAddr;
-        tf_msg.header.stamp = makeAlignedStamp(odom_data->timestamp_ns);
-        tf_msg.transform.translation.x = static_cast<double>(odom_data->pos[0]) / 1e6;
-        tf_msg.transform.translation.y = static_cast<double>(odom_data->pos[1]) / 1e6;
-        tf_msg.transform.translation.z = static_cast<double>(odom_data->pos[2]) / 1e6;
-        tf_msg.transform.rotation.x = static_cast<double>(odom_data->orient[0]) / 1e6;
-        tf_msg.transform.rotation.y = static_cast<double>(odom_data->orient[1]) / 1e6;
-        tf_msg.transform.rotation.z = static_cast<double>(odom_data->orient[2]) / 1e6;
-        tf_msg.transform.rotation.w = static_cast<double>(odom_data->orient[3]) / 1e6;
-        tf_broadcaster_->sendTransform(tf_msg);
+        timestamp_ns = odom_data->timestamp_ns;
+        pos = odom_data->pos;
+        orient = odom_data->orient;
     } else if (data_len == sizeof(ros2_odom_convert_t)) {
         ros2_odom_convert_t* odom_data = (ros2_odom_convert_t*)stream->imageList[0].pAddr;
-        tf_msg.header.stamp = makeAlignedStamp(odom_data->timestamp_ns);
-        tf_msg.transform.translation.x = static_cast<double>(odom_data->pos[0]) / 1e6;
-        tf_msg.transform.translation.y = static_cast<double>(odom_data->pos[1]) / 1e6;
-        tf_msg.transform.translation.z = static_cast<double>(odom_data->pos[2]) / 1e6;
-        tf_msg.transform.rotation.x = static_cast<double>(odom_data->orient[0]) / 1e6;
-        tf_msg.transform.rotation.y = static_cast<double>(odom_data->orient[1]) / 1e6;
-        tf_msg.transform.rotation.z = static_cast<double>(odom_data->orient[2]) / 1e6;
-        tf_msg.transform.rotation.w = static_cast<double>(odom_data->orient[3]) / 1e6;
-        tf_broadcaster_->sendTransform(tf_msg);
+        timestamp_ns = odom_data->timestamp_ns;
+        pos = odom_data->pos;
+        orient = odom_data->orient;
     } else {
         RCLCPP_WARN(this->get_logger(), "Unknown odometry data length: %u", data_len);
+        return;
     }
+
+    // Sensor pose in odom: T_odom_sensor
+    tf2::Transform t_odom_sensor;
+    t_odom_sensor.setOrigin(tf2::Vector3(
+        static_cast<double>(pos[0]) / 1e6,
+        static_cast<double>(pos[1]) / 1e6,
+        static_cast<double>(pos[2]) / 1e6));
+    t_odom_sensor.setRotation(tf2::Quaternion(
+        static_cast<double>(orient[0]) / 1e6,
+        static_cast<double>(orient[1]) / 1e6,
+        static_cast<double>(orient[2]) / 1e6,
+        static_cast<double>(orient[3]) / 1e6));
+
+    geometry_msgs::msg::TransformStamped tf_msg;
+    tf_msg.header.stamp = makeAlignedStamp(timestamp_ns);
+    tf_msg.header.frame_id = "odom";
+
+    if (!tf_base_frame_.empty() && lookupBaseToSensor()) {
+        // T_odom_base = T_odom_sensor * (T_base_sensor)^-1, so the URDF chain
+        // base -> ... -> sensor remains the single parent of the sensor frame.
+        tf_msg.child_frame_id = tf_base_frame_;
+        tf_msg.transform = tf2::toMsg(t_odom_sensor * base_to_sensor_.inverse());
+    } else {
+        // Legacy behavior: publish the raw sensor pose.
+        tf_msg.child_frame_id = sensor_frame_;
+        tf_msg.transform = tf2::toMsg(t_odom_sensor);
+    }
+    tf_broadcaster_->sendTransform(tf_msg);
 }
 
 void Odin1Driver::publishIntensityCloud(capture_Image_List_t* stream, int idx) {

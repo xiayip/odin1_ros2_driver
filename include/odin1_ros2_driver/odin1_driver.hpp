@@ -30,6 +30,9 @@ limitations under the License.
 #include "std_srvs/srv/set_bool.hpp"
 #include "tf2_ros/transform_broadcaster.h"
 #include "tf2_ros/static_transform_broadcaster.h"
+#include "tf2_ros/buffer.h"
+#include "tf2_ros/transform_listener.h"
+#include "tf2/LinearMath/Transform.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
 #include "lidar_api_type.h"
@@ -69,6 +72,10 @@ private:
     void publishBaseToOdomTF(capture_Image_List_t* stream);
     void publishOdomToMapTF(capture_Image_List_t* stream);
     void publishStaticMapToOdomTF();
+    // Look up (and cache) the static extrinsic T_base_sensor from the robot
+    // description TF tree (e.g. base_footprint -> odin1_base_link). Returns
+    // true when the cached transform is valid.
+    bool lookupBaseToSensor();
     // timestamp alignment (ported from official driver: device ts / host ros time / PTP-corrected)
     rclcpp::Time makeAlignedStamp(uint64_t sensor_timestamp_ns);
     void updatePtpSync(const ptp_sync_data_t* ptp_data);
@@ -93,6 +100,12 @@ private:
     // Timestamp source: 0 = device timestamp, 1 = host ROS time, 2 = device timestamp with smoothed PTP offset
     int use_host_ros_time_;
     std::string relocalization_map_abs_path_;
+    // When non-empty (e.g. "base_footprint"), the driver looks up the mounting
+    // extrinsic tf_base_frame -> sensor_frame from TF and publishes
+    // odom -> tf_base_frame instead of odom -> sensor_frame, so the robot's
+    // URDF TF tree stays a single tree without duplicate parents.
+    std::string tf_base_frame_;
+    std::string sensor_frame_;
     // PTP/NTP time-sync smoothing state (updated from LIDAR_DT_NTP stream)
     static constexpr size_t PTP_SMOOTH_WINDOW_SIZE = 300;
     std::mutex ptp_mutex_;
@@ -114,6 +127,11 @@ private:
     // tf_broadcaster
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
+    // TF listener for the mounting extrinsic (only created when tf_base_frame_ is set)
+    std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+    bool have_base_to_sensor_{false};
+    tf2::Transform base_to_sensor_; // T_base_sensor (mounting extrinsic)
     // Subscribers using message filters for synchronization
     std::shared_ptr<message_filters::Subscriber<sensor_msgs::msg::Image>> image_sub_;
     std::shared_ptr<message_filters::Subscriber<sensor_msgs::msg::PointCloud2>> cloud_sub_;
