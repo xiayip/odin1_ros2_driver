@@ -688,12 +688,13 @@ void Odin1Driver::publishOdometry(capture_Image_List_t *stream) {
     }
 
     if (!tf_base_frame_.empty() && lookupBaseToSensor()) {
-        // Report the base frame pose instead of the raw sensor pose:
-        // T_odom_base = T_odom_sensor * (T_base_sensor)^-1.
-        tf2::Transform t_odom_sensor;
-        tf2::fromMsg(msg.pose.pose, t_odom_sensor);
-        tf2::Transform t_odom_base = t_odom_sensor * base_to_sensor_.inverse();
-        tf2::toMsg(t_odom_base, msg.pose.pose);
+        // Report the base frame pose in the re-anchored odom frame:
+        // T_odom_base = B0^-1 * T_dev_sensor * (T_base_sensor)^-1.
+        tf2::Transform t_dev_sensor;
+        tf2::fromMsg(msg.pose.pose, t_dev_sensor);
+        tf2::Transform t_dev_base = t_dev_sensor * base_to_sensor_.inverse();
+        ensureOdomAnchor(t_dev_base, msg.header.stamp);
+        tf2::toMsg(odom_anchor_inv_ * t_dev_base, msg.pose.pose);
 
         // Re-express the body-frame twist in the base frame (rotation only;
         // the lever-arm contribution to linear velocity is neglected).
@@ -717,9 +718,13 @@ void Odin1Driver::publishOdometry(capture_Image_List_t *stream) {
 void Odin1Driver::publishPath(capture_Image_List_t* stream) {
     uint32_t data_len = stream->imageList[0].length;
 
+    // Poses come in device-odom coordinates; when re-anchoring is active they
+    // are published in the device_odom frame (connected to odom by the static
+    // anchor edge), otherwise directly in odom.
+    const std::string path_frame = tf_base_frame_.empty() ? "odom" : device_odom_frame_;
     // Extract the current trajectory pose from the odometry data.
     geometry_msgs::msg::PoseStamped pose;
-    pose.header.frame_id = "odom";
+    pose.header.frame_id = path_frame;
     if (data_len == sizeof(ros_odom_convert_complete_t)) {
         ros_odom_convert_complete_t* odom_data = (ros_odom_convert_complete_t*)stream->imageList[0].pAddr;
         pose.header.stamp = makeAlignedStamp(odom_data->timestamp_ns);
@@ -753,7 +758,7 @@ void Odin1Driver::publishPath(capture_Image_List_t* stream) {
 
     // Publish the accumulated trajectory.
     nav_msgs::msg::Path path_msg;
-    path_msg.header.frame_id = "odom";
+    path_msg.header.frame_id = path_frame;
     path_msg.header.stamp = pose.header.stamp;
     path_msg.poses = path_poses_;
     path_pub_->publish(std::move(path_msg));
@@ -801,7 +806,13 @@ void Odin1Driver::publishOdomToMapTF(capture_Image_List_t* stream) {
     tf_msg.header.stamp = makeAlignedStamp(timestamp_ns);
     tf_msg.header.frame_id = "map";
     tf_msg.child_frame_id = "odom";
-    tf_msg.transform = tf2::toMsg(t_odom_map.inverse());
+    // t_odom_map is expressed against the device odom; when re-anchoring is
+    // active, fold the anchor in so map -> odom matches the shifted odom.
+    if (!tf_base_frame_.empty() && have_odom_anchor_) {
+        tf_msg.transform = tf2::toMsg(t_odom_map.inverse() * odom_anchor_);
+    } else {
+        tf_msg.transform = tf2::toMsg(t_odom_map.inverse());
+    }
     tf_broadcaster_->sendTransform(tf_msg);
 }
 
@@ -845,6 +856,30 @@ bool Odin1Driver::lookupBaseToSensor() {
     }
 }
 
+void Odin1Driver::ensureOdomAnchor(const tf2::Transform& t_dev_base, const rclcpp::Time& stamp) {
+    if (have_odom_anchor_) {
+        return;
+    }
+    odom_anchor_ = t_dev_base;
+    odom_anchor_inv_ = t_dev_base.inverse();
+    have_odom_anchor_ = true;
+
+    // Static edge odom -> device_odom so data stamped in the device-native
+    // odometry frame (slam cloud, path) stays consistent with the re-anchored
+    // odom frame.
+    geometry_msgs::msg::TransformStamped tf_msg;
+    tf_msg.header.stamp = stamp;
+    tf_msg.header.frame_id = "odom";
+    tf_msg.child_frame_id = device_odom_frame_;
+    tf_msg.transform = tf2::toMsg(odom_anchor_inv_);
+    static_tf_broadcaster_->sendTransform(tf_msg);
+
+    const auto& o = odom_anchor_.getOrigin();
+    RCLCPP_INFO(this->get_logger(),
+                "Anchored odom at initial %s pose (device odom origin offset: x=%.3f y=%.3f z=%.3f); published static odom -> %s",
+                tf_base_frame_.c_str(), o.x(), o.y(), o.z(), device_odom_frame_.c_str());
+}
+
 void Odin1Driver::publishBaseToOdomTF(capture_Image_List_t* stream) {
     uint32_t data_len = stream->imageList[0].length;
 
@@ -883,10 +918,13 @@ void Odin1Driver::publishBaseToOdomTF(capture_Image_List_t* stream) {
     tf_msg.header.frame_id = "odom";
 
     if (!tf_base_frame_.empty() && lookupBaseToSensor()) {
-        // T_odom_base = T_odom_sensor * (T_base_sensor)^-1, so the URDF chain
-        // base -> ... -> sensor remains the single parent of the sensor frame.
+        // T_dev_base = T_dev_sensor * (T_base_sensor)^-1, then re-anchor so the
+        // odom origin sits at the robot's initial base pose instead of the
+        // sensor's power-on pose.
+        tf2::Transform t_dev_base = t_odom_sensor * base_to_sensor_.inverse();
+        ensureOdomAnchor(t_dev_base, tf_msg.header.stamp);
         tf_msg.child_frame_id = tf_base_frame_;
-        tf_msg.transform = tf2::toMsg(t_odom_sensor * base_to_sensor_.inverse());
+        tf_msg.transform = tf2::toMsg(odom_anchor_inv_ * t_dev_base);
     } else {
         // Legacy behavior: publish the raw sensor pose.
         tf_msg.child_frame_id = sensor_frame_;
@@ -1013,7 +1051,8 @@ void Odin1Driver::publishIntensityCloud(capture_Image_List_t* stream, int idx) {
 void Odin1Driver::publishPC2XYZRGBA(capture_Image_List_t * stream, int idx) {
 
     sensor_msgs::msg::PointCloud2 msg;
-    msg.header.frame_id = "odom";
+    // SLAM cloud points are expressed in device-odom coordinates.
+    msg.header.frame_id = tf_base_frame_.empty() ? "odom" : device_odom_frame_;
     msg.header.stamp = makeAlignedStamp(stream->imageList[0].timestamp);
 
     //RCLCPP_INFO(rclcpp::get_logger("device_cb"), "Point cloudrgba %ld",stream->imageList[0].timestamp);

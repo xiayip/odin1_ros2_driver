@@ -76,6 +76,12 @@ private:
     // description TF tree (e.g. base_footprint -> odin1_base_link). Returns
     // true when the cached transform is valid.
     bool lookupBaseToSensor();
+    // Anchor the odom frame at the robot's initial base pose. The device
+    // defines its odometry origin at the sensor's power-on pose (top of the
+    // robot); re-anchoring keeps odom at ground level. Also publishes the
+    // static odom -> device_odom_frame edge so device-frame data (clouds,
+    // path) stays consistent.
+    void ensureOdomAnchor(const tf2::Transform& t_dev_base, const rclcpp::Time& stamp);
     // timestamp alignment (ported from official driver: device ts / host ros time / PTP-corrected)
     rclcpp::Time makeAlignedStamp(uint64_t sensor_timestamp_ns);
     void updatePtpSync(const ptp_sync_data_t* ptp_data);
@@ -132,6 +138,11 @@ private:
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
     bool have_base_to_sensor_{false};
     tf2::Transform base_to_sensor_; // T_base_sensor (mounting extrinsic)
+    // Odom re-anchoring state (used when tf_base_frame_ is set)
+    std::string device_odom_frame_{"odin1_odom"}; // device-native odometry frame
+    bool have_odom_anchor_{false};
+    tf2::Transform odom_anchor_;     // B0 = T_devodom_base at first odometry
+    tf2::Transform odom_anchor_inv_; // B0^-1
     // Subscribers using message filters for synchronization
     std::shared_ptr<message_filters::Subscriber<sensor_msgs::msg::Image>> image_sub_;
     std::shared_ptr<message_filters::Subscriber<sensor_msgs::msg::PointCloud2>> cloud_sub_;
